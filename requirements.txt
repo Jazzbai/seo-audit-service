@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+celery
+requests
+beautifulsoup4
+httpx
+pydantic
+python-dotenv
+lxml
+pika 
