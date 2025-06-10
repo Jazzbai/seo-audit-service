@@ -8,6 +8,8 @@ from pydantic import BaseModel
 # Import our Celery app instance and the task
 from workers.celery_app import app as celery_app
 from workers.tasks import add_together
+from workers.orchestrator import run_full_audit
+from app.models.audit import AuditRequest, AuditResponse
 
 # Define a Pydantic model for our task response
 class TaskResponse(BaseModel):
@@ -24,6 +26,19 @@ app = FastAPI(
 async def root():
     """A simple health check endpoint to confirm the API is running."""
     return {"message": "API is running."}
+
+@app.post("/v1/audits", response_model=AuditResponse, status_code=202, tags=["Audit"])
+async def create_audit(request: AuditRequest):
+    """
+    Starts a new SEO audit for the given URL.
+    
+    This triggers the master orchestrator task and returns a task ID
+    which can be used to check the status and retrieve the results.
+    """
+    # Pydantic v2 returns a special URL object, we need to convert it to a string for Celery
+    url_str = str(request.url)
+    task = run_full_audit.delay(url=url_str)
+    return {"task_id": task.id, "message": "Audit successfully started."}
 
 @app.post("/test-task", status_code=202, response_model=TaskResponse, tags=["Tasks"])
 async def run_test_task():

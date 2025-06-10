@@ -11,7 +11,7 @@ app = Celery(
     "workers",
     broker=settings.CELERY_BROKER_URL,
     backend="rpc://",
-    include=["workers.tasks"]  # Automatically discover tasks in this module.
+    include=["workers.tasks", "workers.seo_tasks", "workers.orchestrator"]
 )
 
 app.conf.update(
