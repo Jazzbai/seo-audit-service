@@ -5,6 +5,7 @@ requests
 beautifulsoup4
 httpx
 pydantic
+pydantic-settings
 python-dotenv
 lxml
 pika
