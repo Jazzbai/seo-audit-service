@@ -7,4 +7,5 @@ httpx
 pydantic
 python-dotenv
 lxml
-pika 
+pika
+eventlet 

@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from fastapi import FastAPI
 from celery.result import AsyncResult
 from pydantic import BaseModel
