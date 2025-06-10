@@ -1,20 +1,23 @@
 # Use an official Python runtime as a parent image
 FROM python:3.9-slim
 
-# Set environment variables
+# Set environment variables to ensure good container practices
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
-# Set the working directory in the container
+# Set the working directory inside the container
 WORKDIR /app
 
-# Copy the requirements file and install dependencies
+# Copy only the requirements file first to leverage Docker's build cache.
+# This step is only re-run if requirements.txt changes.
 COPY requirements.txt .
+
+# Install the dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# Copy the rest of the application's source code into the container
 COPY . .
 
-# The command to run the FastAPI application will be specified in docker-compose.yml
-# The command to run the Celery worker will also be specified in docker-compose.yml 
+# The commands to run the web server and worker will be specified in docker-compose.yml
+# This makes the Dockerfile more reusable. 

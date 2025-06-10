@@ -5,8 +5,8 @@ services:
     image: "rabbitmq:3-management-alpine"
     container_name: "rabbitmq"
     ports:
-      - "5672:5672"  # AMQP protocol port
-      - "15672:15672" # Management UI port
+      - "5672:5672"  # AMQP protocol port for Celery
+      - "15672:15672" # Management UI port for browser access
     volumes:
       - ~/.docker-conf/rabbitmq/data/:/var/lib/rabbitmq/
       - ~/.docker-conf/rabbitmq/log/:/var/log/rabbitmq
@@ -15,6 +15,8 @@ services:
       interval: 30s
       timeout: 30s
       retries: 3
+    # Note: For production, you would use persistent volumes to store data.
+    # For local development, this is not strictly necessary.
 
   web:
     build: .
@@ -22,24 +24,24 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - .:/app
+      - .:/app  # Mounts the current directory into the container for live code reloading
     env_file:
       - .env
     command: >
       sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       rabbitmq:
-        condition: service_healthy
+        condition: service_healthy # Waits for RabbitMQ to be ready
 
   worker:
     build: .
     container_name: "seo_audit_worker"
     volumes:
-      - .:/app
+      - .:/app # Also mount for live reloading
     env_file:
       - .env
     command: >
       sh -c "celery -A workers.celery_app worker --loglevel=info"
     depends_on:
       rabbitmq:
-        condition: service_healthy 
+        condition: service_healthy # Also waits for RabbitMQ 

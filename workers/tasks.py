@@ -2,12 +2,16 @@ import time
 from .celery_app import app
 
 
-@app.task
-def add_together(a: int, b: int) -> int:
+@app.task(bind=True)
+def add_together(self, a: int, b: int) -> int:
     """
-    A simple test task that adds two numbers together.
-    We add a time.sleep() to simulate a task that takes some time to run,
-    which is a more realistic scenario for our future SEO tasks.
+    A simple test task that adds two numbers.
+    - `bind=True` gives us access to `self` (the task instance),
+      which is useful for tracking and custom states.
+    - We add a time.sleep() to simulate a real-world task that isn't instant.
     """
+    print(f"Executing task {self.request.id}...")
     time.sleep(5)
-    return a + b 
+    result = a + b
+    print(f"Task {self.request.id} completed with result: {result}")
+    return result 
