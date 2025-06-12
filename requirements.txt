@@ -1,12 +1,14 @@
 fastapi
 uvicorn[standard]
 celery
-requests
-beautifulsoup4
 httpx
+beautifulsoup4==4.12.3
 pydantic
 pydantic-settings
 python-dotenv
 lxml
 pika
-eventlet 
+psycopg[binary]==3.2.1
+# Database
+SQLAlchemy==2.0.30
+alembic==1.13.1 

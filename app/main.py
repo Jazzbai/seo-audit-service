@@ -1,79 +1,88 @@
-import eventlet
-eventlet.monkey_patch()
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException
+from pydantic import BaseModel, HttpUrl
 from celery.result import AsyncResult
-from pydantic import BaseModel
+from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
-# Import our Celery app instance and the task
-from workers.celery_app import app as celery_app
-from workers.tasks import add_together
-from workers.orchestrator import run_full_audit
-from app.models.audit import AuditRequest, AuditResponse
+# Import our new Celery app instance and the async task
+from app.celery_app import celery_app
+from app.tasks.orchestrator import run_full_audit
+from app.db.session import get_db, Base, engine
+from app.models.audit import Audit
 
-# Define a Pydantic model for our task response
-class TaskResponse(BaseModel):
+# Load environment variables from .env file
+load_dotenv()
+
+# Create all database tables on startup (for development)
+# In production, you would rely solely on Alembic migrations.
+Base.metadata.create_all(bind=engine)
+
+# --- Pydantic Models ---
+
+class AuditRequest(BaseModel):
+    """The request model for starting a new audit."""
+    url: HttpUrl
+
+class AuditResponse(BaseModel):
+    """The response model for a successfully launched audit."""
+    audit_id: int
     task_id: str
     status: str
 
+# --- FastAPI Application ---
+
 app = FastAPI(
-    title="SEO Audit Agent API", 
-    description="API for triggering and managing SEO audits.", 
-    version="1.0.0"
+    title="SEO Audit Agent API",
+    description="API for triggering and managing SEO audits.",
+    version="0.4.0" # Version for Postgres integration
 )
+
+# --- API Endpoints ---
 
 @app.get("/", tags=["Health Check"])
 async def root():
     """A simple health check endpoint to confirm the API is running."""
-    return {"message": "API is running."}
+    return {"message": "API is running and ready to accept tasks."}
 
-@app.post("/v1/audits", response_model=AuditResponse, status_code=202, tags=["Audit"])
-async def create_audit(request: AuditRequest):
+@app.post("/v1/audits", response_model=AuditResponse, status_code=202, tags=["Audits"])
+async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
     """
-    Starts a new SEO audit for the given URL.
+    Triggers the full SEO audit workflow.
     
-    This triggers the master orchestrator task and returns a task ID
-    which can be used to check the status and retrieve the results.
+    This endpoint creates a new record in the database, then launches the
+    Celery orchestrator task to perform the crawl and analysis.
     """
-    # Pydantic v2 returns a special URL object, we need to convert it to a string for Celery
     url_str = str(request.url)
-    task = run_full_audit.delay(url=url_str)
-    return {"task_id": task.id, "message": "Audit successfully started."}
 
-@app.post("/test-task", status_code=202, response_model=TaskResponse, tags=["Tasks"])
-async def run_test_task():
-    """
-    Triggers the simple 'add_together' test task.
-    
-    This sends the task to the Celery worker and immediately returns
-    the task ID for tracking.
-    """
-    task = add_together.delay(5, 5)
-    return {"task_id": task.id, "status": "PENDING"}
+    # 1. Create a record in our database
+    new_audit = Audit(url=url_str, status="PENDING")
+    db.add(new_audit)
+    db.commit()
+    db.refresh(new_audit)
 
-@app.get("/results/{task_id}", tags=["Tasks"])
-async def get_task_result(task_id: str):
-    """
-    Retrieves the result of a specific task by its ID.
+    # 2. Launch the background task with the new audit ID
+    task = run_full_audit.delay(audit_id=new_audit.id, url=url_str)
     
-    Call this endpoint after getting a task_id from `/test-task`.
-    It checks the task's status and, if completed, returns the result.
-    """
-    task_result = AsyncResult(task_id, app=celery_app)
-    
-    if not task_result.ready():
-        return {"task_id": task_id, "status": "PENDING"}
+    return {
+        "audit_id": new_audit.id,
+        "task_id": task.id,
+        "status": "PENDING"
+    }
 
-    if task_result.successful():
-        return {
-            "task_id": task_id,
-            "status": "SUCCESS",
-            "result": task_result.get(),
-        }
-    else:
-        # The task failed. Return the error information.
-        return {
-            "task_id": task_id,
-            "status": "FAILURE",
-            "error": str(task_result.info),
-        } 
+@app.get("/v1/audits/{audit_id}", tags=["Audits"])
+async def get_audit_status(audit_id: int, db: Session = Depends(get_db)):
+    """
+    Retrieves the status and results of an audit from the database.
+    """
+    audit = db.query(Audit).filter(Audit.id == audit_id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found")
+        
+    return {
+        "audit_id": audit.id,
+        "status": audit.status,
+        "url": audit.url,
+        "created_at": audit.created_at,
+        "completed_at": audit.completed_at,
+        "report": audit.report_json
+    } 

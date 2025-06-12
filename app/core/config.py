@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     and validates them against the defined types.
     """
     CELERY_BROKER_URL: str
+    CELERY_RESULT_BACKEND: str
 
     class Config:
         # This tells Pydantic to look for a .env file if the environment variables are not set.
