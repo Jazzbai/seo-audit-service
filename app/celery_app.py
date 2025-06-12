@@ -1,19 +1,19 @@
+# IMPORTANT: This import is no longer needed.
+# import app.utils.serialization
+
 from celery import Celery
 from app.core.config import settings
 
 # Create the Celery application instance
-celery_app = Celery("seo_audit_agent")
+# The `include` argument is a list of modules to import when the worker starts.
+# This is the most reliable way to ensure our tasks are discovered.
+celery_app = Celery(
+    "seo_audit_agent",
+    include=['app.tasks.orchestrator', 'app.tasks.seo_tasks']
+)
 
-# Load Celery configuration from our Pydantic settings object.
-# Celery will automatically look for uppercase attributes starting with 'CELERY_'.
-celery_app.config_from_object(settings, namespace='CELERY')
-
-# Set the result backend explicitly from the loaded settings
-celery_app.conf.result_backend = settings.CELERY_RESULT_BACKEND
-
-# Configure Celery to automatically discover tasks.
-# It will look for a 'tasks' module in each of the specified packages.
-celery_app.autodiscover_tasks(['app.tasks'])
+# Load configuration directly from our Pydantic settings object.
+celery_app.conf.update(settings.model_dump())
 
 @celery_app.task(bind=True)
 def debug_task(self):

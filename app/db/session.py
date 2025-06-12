@@ -1,9 +1,10 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-import os
+from app.core.config import settings
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Get the database URL from our validated Pydantic settings
+DATABASE_URL = settings.DATABASE_URL
 
 # The application will fail to start if this is not set, which is the desired behavior.
 if not DATABASE_URL:

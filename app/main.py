@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 from celery.result import AsyncResult
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
+import datetime
+from typing import Optional, Any
 
 # Import our new Celery app instance and the async task
 from app.celery_app import celery_app
@@ -28,6 +30,18 @@ class AuditResponse(BaseModel):
     audit_id: int
     task_id: str
     status: str
+
+class AuditResultResponse(BaseModel):
+    """The response model for a retrieved audit result."""
+    audit_id: int = Field(alias="id")
+    status: str
+    url: str
+    created_at: datetime.datetime
+    completed_at: Optional[datetime.datetime]
+    report: Optional[Any] = Field(None, alias="report_json")
+
+    class Config:
+        from_attributes = True
 
 # --- FastAPI Application ---
 
@@ -69,20 +83,19 @@ async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
         "status": "PENDING"
     }
 
-@app.get("/v1/audits/{audit_id}", tags=["Audits"])
-async def get_audit_status(audit_id: int, db: Session = Depends(get_db)):
+@app.get("/v1/audits/{audit_id}", response_model=AuditResultResponse, tags=["Audits"])
+async def get_audit_result(audit_id: int, db: Session = Depends(get_db)):
     """
     Retrieves the status and results of an audit from the database.
+    
+    This provides the full report for a completed audit, or the current
+    status for an audit in progress.
     """
-    audit = db.query(Audit).filter(Audit.id == audit_id).first()
-    if not audit:
+    audit_record = db.query(Audit).filter(Audit.id == audit_id).first()
+    if not audit_record:
         raise HTTPException(status_code=404, detail="Audit not found")
         
-    return {
-        "audit_id": audit.id,
-        "status": audit.status,
-        "url": audit.url,
-        "created_at": audit.created_at,
-        "completed_at": audit.completed_at,
-        "report": audit.report_json
-    } 
+    # By using a response_model with from_attributes=True, we can return
+    # the SQLAlchemy model directly. Pydantic will handle mapping the
+    # `audit_record.report_json` to the `report` field in the response model.
+    return audit_record 

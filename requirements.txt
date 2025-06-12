@@ -11,4 +11,6 @@ pika
 psycopg[binary]==3.2.1
 # Database
 SQLAlchemy==2.0.30
-alembic==1.13.1 
+alembic==1.13.1
+advertools 
+pandas
