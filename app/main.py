@@ -24,6 +24,7 @@ Base.metadata.create_all(bind=engine)
 class AuditRequest(BaseModel):
     """The request model for starting a new audit."""
     url: HttpUrl
+    max_pages: Optional[int] = Field(100, description="The maximum number of pages to crawl.")
 
 class AuditResponse(BaseModel):
     """The response model for a successfully launched audit."""
@@ -74,8 +75,8 @@ async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_audit)
 
-    # 2. Launch the background task with the new audit ID
-    task = run_full_audit.delay(audit_id=new_audit.id, url=url_str)
+    # 2. Launch the background task with the new audit ID and max_pages
+    task = run_full_audit.delay(audit_id=new_audit.id, url=url_str, max_pages=request.max_pages)
     
     return {
         "audit_id": new_audit.id,

@@ -59,7 +59,7 @@ def _get_top_words(series: pd.Series, n: int = 10) -> list:
     return word_counts.most_common(n)
 
 @celery_app.task(bind=True)
-def run_advertools_crawl(self, audit_id: int, url: str) -> str:
+def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
     """
     Runs a polite and comprehensive advertools crawl for a given URL.
 
@@ -71,6 +71,7 @@ def run_advertools_crawl(self, audit_id: int, url: str) -> str:
     Args:
         audit_id: The ID for the audit to associate the crawl with.
         url: The starting URL for the crawl.
+        max_pages: The maximum number of pages to crawl.
 
     Returns:
         The file path to the JSON Lines (.jl) file containing the crawl results.
@@ -103,7 +104,7 @@ def run_advertools_crawl(self, audit_id: int, url: str) -> str:
         'DOWNLOAD_DELAY': 1,
         'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
         'ROBOTSTXT_OBEY': False,
-        'CLOSESPIDER_PAGECOUNT': 100,  # Safety limit
+        'CLOSESPIDER_PAGECOUNT': max_pages,
         'USER_AGENT': 'Python-SEOAuditAgent/1.0 (+https://github.com/user/repo)', # Good practice to identify your bot
         'LOG_FILE': log_file,
     }
@@ -252,20 +253,22 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
     return final_report
 
 @celery_app.task(bind=True)
-def run_full_audit(self, audit_id: int, url: str):
+def run_full_audit(self, audit_id: int, url: str, max_pages: int = 100):
     """
-    The master orchestrator task.
-    This creates a simple, robust, two-step chain:
-    1. Run the advertools crawler.
-    2. Compile the report from the crawler's output file.
+    The main orchestrator task that chains together the audit process.
+    It starts with a crawl and then compiles the report.
     """
-    # .s() creates a signature. The | operator chains them together.
-    # The output of the first task becomes the first argument to the second.
-    workflow = (
-        run_advertools_crawl.s(audit_id=audit_id, url=url) | 
-        compile_report_from_crawl.s(audit_id=audit_id)
-    )
-    workflow.apply_async()
-    
     logger.info(f"Launched audit workflow for url: {url} (Audit ID: {audit_id})")
-    return {"message": "Audit workflow successfully launched."}
+    # This chain ensures that the report compilation task only runs after the
+    # crawl task has successfully completed and passed its output file path.
+    # The `s()` signature creates a 'subtask' that can be part of a chain.
+    task_chain = chain(
+        run_advertools_crawl.s(audit_id, url, max_pages),
+        compile_report_from_crawl.s(audit_id)
+    )
+    task_chain.apply_async()
+    return {'message': 'Audit workflow successfully launched.'}
+
+@celery_app.task
+def debug_task():
+    print('Request: {0!r}'.format(debug_task.request))
