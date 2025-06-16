@@ -134,4 +134,8 @@ dmypy.json
 cython_debug/
 
 # macOS specific
-.DS_Store 
+.DS_Store
+
+# SEO Audit Agent specific
+logs/
+results/ 

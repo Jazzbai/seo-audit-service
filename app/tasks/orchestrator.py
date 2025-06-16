@@ -1,131 +1,234 @@
 import advertools as adv
-from celery import group, chord
+from celery import chain
 from app.celery_app import celery_app
-from app.tasks.seo_tasks import get_page_title, get_meta_description, get_h1_heading
 from app.db.session import SessionLocal
 from app.models.audit import Audit
 import datetime
 import pandas as pd
 import os
+import logging
+import re
+from collections import Counter
+
+# --- Learning Notes: Stop Words ---
+# Stop words are common words (like 'a', 'the', 'is') that are filtered out
+# during natural language processing because they provide little semantic value.
+# Removing them helps us focus on the most meaningful keywords in a text.
+# While libraries like NLTK or spaCy have extensive lists, a simple, curated
+# list like this is often sufficient and avoids adding heavy dependencies.
+STOP_WORDS = {
+    # Standard English stop words
+    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 
+    'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 
+    'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 
+    'theirs', 'themselves', 'what', 'which', 'who', 'whom', 'this', 'that', 
+    'these', 'those', 'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 
+    'have', 'has', 'had', 'having', 'do', 'does', 'did', 'doing', 'a', 'an', 
+    'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 
+    'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into', 'through', 
+    'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down', 
+    'in', 'out', 'on', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 
+    'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both', 'each', 
+    'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 
+    'own', 'same', 'so', 'than', 'too', 'very', 's', 't', 'can', 'will', 'just', 
+    'don', 'should', 'now', 'd', 'll', 'm', 'o', 're', 've', 'y', '-', '–', '|',
+    # Website-specific noise words we have observed
+    'page', 'archives', 'club', 'tag', 'category', 'author', 'events',
+    # Months
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 
+    'september', 'october', 'november', 'december'
+}
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def _get_top_words(series: pd.Series, n: int = 10) -> list:
+    """Helper function to extract top N words from a pandas Series of text."""
+    # Drop missing values and concatenate all text into a single string
+    text = series.dropna().str.cat(sep=' ').lower()
+    
+    # Find all words, ignoring punctuation
+    words = re.findall(r'\b[a-z]+\b', text)
+    
+    # Filter out stop words and count frequencies
+    word_counts = Counter(w for w in words if w not in STOP_WORDS)
+    
+    # Return the N most common words and their counts
+    return word_counts.most_common(n)
 
 @celery_app.task(bind=True)
-def analyze_site_with_advertools(self, url: str) -> dict:
+def run_advertools_crawl(self, audit_id: int, url: str) -> str:
     """
-    Uses advertools to crawl a site, collecting all internal, non-asset URLs
-    and identifying broken links (4xx/5xx status) in one pass.
+    Runs a polite and comprehensive advertools crawl for a given URL.
+
+    This task is the first step in the audit. It delegates the complex,
+    I/O-bound work of crawling to a specialized library (`advertools`).
+    It saves the raw results to a file and passes the file path to the
+    next task for processing.
+
+    Args:
+        audit_id: The ID for the audit to associate the crawl with.
+        url: The starting URL for the crawl.
+
+    Returns:
+        The file path to the JSON Lines (.jl) file containing the crawl results.
     """
-    print(f"Starting advertools analysis for: {url}")
-    output_file = f"crawl_results_{self.request.id}.jl"
+    logger.info(f"Starting advertools crawl for audit_id: {audit_id}, url: {url}")
     
-    # Configure advertools to be polite and efficient.
-    # CONCURRENT_REQUESTS_PER_DOMAIN=2: Limits simultaneous requests to the server.
-    # DOWNLOAD_DELAY=1: Waits 1 second between requests.
-    # CLOSESPIDER_PAGECOUNT=100: Safety limit to avoid crawling huge sites.
-    adv.crawl(
-        url_list=url,
-        output_file=output_file,
-        follow_links=True,
-        custom_settings={
-            'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
-            'DOWNLOAD_DELAY': 1,
-            'CLOSESPIDER_PAGECOUNT': 100,
-            'USER_AGENT': 'Python-SEOAuditAgent/1.0 (advertools)',
-            'LOG_FILE': 'advertools.log'
-        }
-    )
-    print(f"advertools crawl finished for: {url}")
+    # Define unique output and log files for this specific audit.
+    # We create dedicated directories to keep the project root clean.
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+    output_file = f"results/audit_results_{audit_id}.jl"
+    log_file = f"logs/audit_log_{audit_id}.log"
 
-    # Process the results
-    crawl_df = pd.read_json(output_file, lines=True)
-    os.remove(output_file) # Clean up the file after reading
-
-    # Filter for crawlable HTML pages (status 200, content-type text/html)
-    successful_pages = crawl_df[
-        (crawl_df['status'] == 200) & 
-        (crawl_df['resp_headers_Content-Type'].str.contains('text/html', na=False))
-    ]
-    crawlable_urls = successful_pages['url'].unique().tolist()
-
-    # Identify broken links (any 4xx or 5xx status code)
-    broken_links_df = crawl_df[crawl_df['status'] >= 400]
-    broken_links_report = [
-        {"url": row['url'], "status_code": row['status'], "source_page": row.get('request_headers_Referer')}
-        for index, row in broken_links_df.iterrows()
-    ]
-    
-    return {
-        "crawlable_urls": crawlable_urls,
-        "broken_links_report": {
-            "status": "SUCCESS" if not broken_links_report else "FAILURE",
-            "url": url, # The top-level URL this check is for
-            "check": "broken_links",
-            "value": broken_links_report,
-            "message": f"Found {len(broken_links_report)} broken links."
-        }
+    # --- Learning Notes on `custom_settings` ---
+    # This is how we make our crawler robust and polite.
+    # 1. `DOWNLOAD_DELAY`: The most important setting for avoiding rate-limiting.
+    #    It forces the crawler to wait for this many seconds between requests to
+    #    the same domain. A value of 1-3 is generally considered polite.
+    # 2. `CONCURRENT_REQUESTS_PER_DOMAIN`: Further limits the crawler to only
+    #    make this many requests at once. Setting it to 1 makes the crawl
+    #    strictly sequential for the domain, which is very safe.
+    # 3. `ROBOTSTXT_OBEY`: For a comprehensive audit, we often want to see
+    #    pages that might be disallowed for regular bots. We set this to False
+    #    to ensure we analyze the entire public site.
+    # 4. `CLOSESPIDER_PAGECOUNT`: A crucial safety net. It prevents runaway crawls
+    #    on massive websites by stopping after a set number of pages.
+    # 5. `LOG_FILE`: Essential for debugging. All of the crawler's internal
+    #    actions and any errors will be saved here.
+    custom_settings = {
+        'DOWNLOAD_DELAY': 1,
+        'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+        'ROBOTSTXT_OBEY': False,
+        'CLOSESPIDER_PAGECOUNT': 100,  # Safety limit
+        'USER_AGENT': 'Python-SEOAuditAgent/1.0 (+https://github.com/user/repo)', # Good practice to identify your bot
+        'LOG_FILE': log_file,
     }
 
-@celery_app.task
-def pass_through_result(result: dict) -> dict:
-    """
-    A simple task that just returns its input. Useful for injecting
-    an already-computed result into a Celery workflow (like a chord).
-    """
-    return result
+    try:
+        adv.crawl(
+            url_list=url,
+            output_file=output_file,
+            follow_links=True,
+            custom_settings=custom_settings
+        )
+        logger.info(f"Crawl finished for audit_id: {audit_id}. Results in: {output_file}")
+        return output_file
+    except Exception as e:
+        logger.error(f"Advertools crawl failed for audit_id: {audit_id} with error: {e}", exc_info=True)
+        # In case of a catastrophic failure, update the audit and stop.
+        db = SessionLocal()
+        try:
+            audit = db.query(Audit).filter(Audit.id == audit_id).first()
+            if audit:
+                audit.status = "ERROR"
+                audit.report_json = {"status": "ERROR", "message": f"Crawling failed: {e!r}"}
+                audit.completed_at = datetime.datetime.utcnow()
+                db.commit()
+        finally:
+            db.close()
+        raise  # Re-raise exception to mark the Celery task as FAILED
 
 @celery_app.task(bind=True)
-def compile_report_task(self, results: list, audit_id: int) -> dict:
+def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> dict:
     """
-    Takes the list of results from all analysis tasks, groups them by URL,
-    and saves the structured report to the database.
+    The second and final step. Takes the file path from the crawl task,
+    reads the advertools crawl data, transforms it into our desired report
+    format, and saves it to the database.
     """
-    print(f"Executing compile_report_task for audit_id: {audit_id}")
-    
-    # The first result is the master report of all broken links found.
-    broken_links_master_report = results[0]
-    all_broken_links = broken_links_master_report.get('value', [])
-    
-    # Create a mapping from a source page to the links that are broken on it.
-    broken_links_by_source = {}
-    for link in all_broken_links:
-        source_page = link.get('source_page')
-        if source_page:
-            if source_page not in broken_links_by_source:
-                broken_links_by_source[source_page] = []
-            # We don't need to repeat the source_page in the final report value
-            broken_link_details = {k: v for k, v in link.items() if k != 'source_page'}
-            broken_links_by_source[source_page].append(broken_link_details)
+    logger.info(f"Compiling report for audit_id: {audit_id} from file: {crawl_output_file}")
 
-    # Group the main SEO check results by URL
-    grouped_results = {}
-    for result in results[1:]: # Process the rest of the SEO checks
-        url = result.get("url")
-        if url:
-            if url not in grouped_results:
-                grouped_results[url] = []
+    try:
+        crawl_df = pd.read_json(crawl_output_file, lines=True)
+    except FileNotFoundError:
+        logger.error(f"Crawl output file not found: {crawl_output_file} for audit_id: {audit_id}")
+        return {"status": "ERROR", "message": "Crawl output file not found."}
+
+    # --- Section 1: Generate the detailed per-page report and collect summary stats ---
+    page_level_report = {}
+    pages_with_title = 0
+    pages_with_meta_desc = 0
+    pages_with_one_h1 = 0
+    pages_with_multiple_h1s = 0
+    pages_with_no_h1 = 0
+
+    for _, row in crawl_df.iterrows():
+        url = row.get('url')
+        if not url:
+            continue
+
+        page_report = []
+        
+        # 1. Title Check
+        title = row.get('title')
+        if pd.notna(title) and title:
+            pages_with_title += 1
+            page_report.append({"status": "SUCCESS", "check": "title", "value": title.strip(), "message": "Title found."})
+        else:
+            page_report.append({"status": "FAILURE", "check": "title", "value": None, "message": "Title tag not found or is empty."})
             
-            check_result = result.copy()
-            if "url" in check_result:
-                del check_result["url"]
-            grouped_results[url].append(check_result)
+        # 2. Meta Description Check
+        meta_desc = row.get('meta_desc')
+        if pd.notna(meta_desc) and meta_desc:
+            pages_with_meta_desc += 1
+            page_report.append({"status": "SUCCESS", "check": "meta_description", "value": meta_desc.strip(), "message": "Meta description found."})
+        else:
+            page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
+        
+        # 3. H1 Heading Check
+        h1s = []
+        h1_raw = row.get('h1')
+        if pd.notna(h1_raw) and h1_raw:
+            h1s = [h.strip() for h in h1_raw.split('@@') if h.strip()]
+        
+        if len(h1s) == 1:
+            pages_with_one_h1 += 1
+            page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1s[0]})
+        elif len(h1s) == 0:
+            pages_with_no_h1 += 1
+            page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
+        else:
+            pages_with_multiple_h1s += 1
+            page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1s)} H1 tags. Expected 1.", "count": len(h1s), "value": h1s})
 
-    # Now, inject a specific broken links report into each page that needs one.
-    for url, broken_links in broken_links_by_source.items():
-        if url in grouped_results:
-            grouped_results[url].append({
-                "status": "FAILURE",
-                "check": "broken_links",
-                "value": broken_links,
-                "message": f"Found {len(broken_links)} broken links on this page."
-            })
+        page_level_report[url] = page_report
 
+    # --- Section 2: Generate the broken links report ---
+    # We identify broken links as any URL that returned a status code of 400 or greater.
+    broken_links_df = crawl_df[crawl_df['status'] >= 400].copy()
+    broken_links_report = []
+    
+    referer_col = 'request_headers_Referer'
+    if referer_col in broken_links_df.columns:
+        broken_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
+        broken_links_report = broken_links_df[['url', 'status', 'source_url']].to_dict('records')
+    else:
+        broken_links_report = broken_links_df[['url', 'status']].to_dict('records')
+
+    # --- Section 3: Assemble the final, structured report ---
+    total_pages = len(page_level_report)
     final_report = {
         "status": "COMPLETE",
         "audit_id": audit_id,
-        "total_pages_analyzed": len(grouped_results),
-        "report": grouped_results
+        "summary": {
+            "total_pages_analyzed": total_pages,
+            "broken_links_found": len(broken_links_report),
+            "pages_missing_title": total_pages - pages_with_title,
+            "pages_missing_meta_description": total_pages - pages_with_meta_desc,
+            "pages_with_correct_h1": pages_with_one_h1,
+            "pages_with_multiple_h1s": pages_with_multiple_h1s,
+            "pages_with_no_h1": pages_with_no_h1,
+            "top_10_title_words": _get_top_words(crawl_df['title']),
+            "top_10_h1_words": _get_top_words(crawl_df['h1']),
+        },
+        "broken_links": broken_links_report,
+        "page_level_report": page_level_report
     }
-    
-    # --- Update Database ---
+
+    # Update Database
     db = SessionLocal()
     try:
         audit = db.query(Audit).filter(Audit.id == audit_id).first()
@@ -134,56 +237,35 @@ def compile_report_task(self, results: list, audit_id: int) -> dict:
             audit.report_json = final_report
             audit.completed_at = datetime.datetime.utcnow()
             db.commit()
+            logger.info(f"Successfully saved report for audit_id: {audit_id}")
     finally:
         db.close()
-    # ---------------------
+    
+    # Clean up the crawl files
+    try:
+        os.remove(crawl_output_file)
+        # We are intentionally NOT deleting the log file. It's a valuable
+        # artifact for debugging any crawl or analysis issues.
+    except OSError as e:
+        logger.warning(f"Error cleaning up result file for audit_id {audit_id}: {e}")
 
     return final_report
 
 @celery_app.task(bind=True)
 def run_full_audit(self, audit_id: int, url: str):
     """
-    The master orchestrator task. Replaces crawling with a single advertools analysis task.
+    The master orchestrator task.
+    This creates a simple, robust, two-step chain:
+    1. Run the advertools crawler.
+    2. Compile the report from the crawler's output file.
     """
-    workflow = analyze_site_with_advertools.s(url) | start_seo_analysis_workflow.s(audit_id=audit_id)
+    # .s() creates a signature. The | operator chains them together.
+    # The output of the first task becomes the first argument to the second.
+    workflow = (
+        run_advertools_crawl.s(audit_id=audit_id, url=url) | 
+        compile_report_from_crawl.s(audit_id=audit_id)
+    )
     workflow.apply_async()
     
-    print(f"Launched audit workflow for url: {url} (Audit ID: {audit_id})")
+    logger.info(f"Launched audit workflow for url: {url} (Audit ID: {audit_id})")
     return {"message": "Audit workflow successfully launched."}
-
-@celery_app.task(bind=True)
-def start_seo_analysis_workflow(self, analysis_result: dict, audit_id: int):
-    """
-    This task acts as a dynamic dispatcher.
-    It receives the data from advertools and creates a chord for further analysis.
-    """
-    crawlable_urls = analysis_result.get("crawlable_urls", [])
-    broken_links_report = analysis_result.get("broken_links_report", {})
-
-    if not crawlable_urls:
-        print(f"No crawlable URLs to analyze for audit_id: {audit_id}. Compiling report now.")
-        # Pass just the broken links report to the compiler
-        compile_report_task.s(results=[broken_links_report], audit_id=audit_id).apply_async()
-        return
-
-    # Create a list of analysis tasks for all crawlable pages.
-    # We use .si() (immutable signature) to prevent the parent task's arguments
-    # (i.e., analysis_result) from being passed to these sub-tasks.
-    page_analysis_tasks = []
-    for url in crawlable_urls:
-        page_analysis_tasks.append(get_page_title.si(url))
-        page_analysis_tasks.append(get_meta_description.si(url))
-        page_analysis_tasks.append(get_h1_heading.si(url))
-
-    # The header for our chord will run all page analysis tasks in parallel.
-    # We also include a task to pass our broken_links_report into the results list.
-    header_tasks = [pass_through_result.s(broken_links_report)] + page_analysis_tasks
-    header = group(header_tasks)
-    
-    # The callback task will receive the results from all header tasks.
-    callback = compile_report_task.s(audit_id=audit_id)
-    
-    # The chord will execute the header group, then the callback with the results.
-    chord(header, body=callback).apply_async()
-    
-    print(f"Dispatched a chord of {len(header_tasks)} total SEO tasks for audit_id: {audit_id}.")

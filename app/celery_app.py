@@ -9,7 +9,7 @@ from app.core.config import settings
 # This is the most reliable way to ensure our tasks are discovered.
 celery_app = Celery(
     "seo_audit_agent",
-    include=['app.tasks.orchestrator', 'app.tasks.seo_tasks']
+    include=['app.tasks.orchestrator']
 )
 
 # Load configuration directly from our Pydantic settings object.
