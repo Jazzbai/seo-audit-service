@@ -15,7 +15,7 @@ The agent is designed to be resilient, handling server errors and rate-limiting 
     - Page Title presence and content.
     - Meta Description presence and content.
     - H1 Heading rules (exactly one per page).
-    - Broken links (4xx and 5xx status codes) on a per-page basis.
+    - A site-wide report of broken links (4xx and 5xx status codes).
 - **RESTful API**: A simple FastAPI interface for starting audits and fetching results.
 - **Persistent Storage**: Uses PostgreSQL to store audit status and the final JSON reports.
 
@@ -120,7 +120,7 @@ Use this terminal to interact with the API using a tool like `curl` or Postman.
 
 ### 1. Start a New Audit
 
-Send a `POST` request to the `/v1/audits` endpoint with the URL you want to analyze.
+Send a `POST` request to the `/v1/audits` endpoint with the URL you want to analyze. You can also specify an optional `max_pages` to limit the crawl depth.
 
 **Example Request:**
 
@@ -128,7 +128,8 @@ Send a `POST` request to the `/v1/audits` endpoint with the URL you want to anal
 curl -X POST "http://127.0.0.1:8000/v1/audits" \
 -H "Content-Type: application/json" \
 -d '{
-  "url": "http://leobeautycenter.com/"
+  "url": "https://advertools.readthedocs.io/en/latest/advertools.spider.html",
+  "max_pages": 50
 }'
 ```
 
@@ -154,25 +155,64 @@ curl -X GET "http://127.0.0.1:8000/v1/audits/1"
 
 **Example Response (`200 OK`):**
 
-The response will contain the full, detailed report, structured by URL.
+The response will contain the full, detailed report, structured with a high-level summary, a list of all broken links, and a page-by-page breakdown.
 
 ```json
 {
     "audit_id": 1,
     "status": "COMPLETE",
-    "url": "http://leobeautycenter.com/",
-    "created_at": "2025-06-12T22:40:18.289611",
-    "completed_at": "2025-06-12T22:42:56.976652",
+    "url": "https://advertools.readthedocs.io/en/latest/advertools.spider.html",
+    "created_at": "2025-06-13T18:00:00.000000",
+    "completed_at": "2025-06-13T18:02:00.000000",
     "report": {
         "status": "COMPLETE",
         "audit_id": 1,
-        "total_pages_analyzed": 79,
-        "report": {
-            "https://leobeautycenter.com/": [
+        "summary": {
+            "total_pages_analyzed": 50,
+            "broken_links_found": 1,
+            "pages_missing_title": 2,
+            "pages_missing_meta_description": 48,
+            "pages_with_correct_h1": 45,
+            "pages_with_multiple_h1s": 3,
+            "pages_with_no_h1": 2,
+            "top_10_title_words": [
+                ["advertools", 50],
+                ["spider", 40],
+                ["crawl", 30],
+                ["python", 20],
+                ["seo", 15],
+                ["adv", 10],
+                ["documentation", 8],
+                ["api", 7],
+                ["tutorial", 5],
+                ["example", 4]
+            ],
+            "top_10_h1_words": [
+                ["advertools-spider", 30],
+                ["usage", 25],
+                ["arguments", 22],
+                ["settings", 18],
+                ["custom", 12],
+                ["output", 11],
+                ["examples", 9],
+                ["functions", 6],
+                ["class", 5],
+                ["method", 4]
+            ]
+        },
+        "broken_links": [
+            {
+                "url": "https://advertools.readthedocs.io/en/latest/non_existent_page.html",
+                "status": 404,
+                "source_url": "https://advertools.readthedocs.io/en/latest/advertools.spider.html"
+            }
+        ],
+        "page_level_report": {
+            "https://advertools.readthedocs.io/en/latest/advertools.spider.html": [
                 {
                     "status": "SUCCESS",
                     "check": "title",
-                    "value": "Leo Spa – Beauty Center in Sugarland, TX",
+                    "value": "advertools.spider - advertools",
                     "message": "Title found."
                 },
                 {
@@ -182,18 +222,14 @@ The response will contain the full, detailed report, structured by URL.
                     "message": "Meta description not found or is empty."
                 },
                 {
-                    "status": "FAILURE",
-                    "check": "broken_links",
-                    "value": [
-                        {
-                            "url": "https://leobeautycenter.com/about-features/",
-                            "status_code": 404
-                        }
-                    ],
-                    "message": "Found 1 broken links on this page."
+                    "status": "SUCCESS",
+                    "check": "h1_heading",
+                    "message": "Exactly one H1 tag found.",
+                    "count": 1,
+                    "value": "advertools.spider"
                 }
             ],
-            "https://leobeautycenter.com/about/": [
+            "https://advertools.readthedocs.io/en/latest/another_page.html": [
                 // ... results for this page
             ]
         }
