@@ -1,5 +1,5 @@
 import advertools as adv
-from celery import chain
+from celery import chain, group
 from app.celery_app import celery_app
 from app.db.session import SessionLocal
 from app.models.audit import Audit
@@ -9,6 +9,7 @@ import os
 import logging
 import re
 from collections import Counter
+from urllib.parse import urlparse
 
 # --- Learning Notes: Stop Words ---
 # Stop words are common words (like 'a', 'the', 'is') that are filtered out
@@ -136,9 +137,10 @@ def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
 @celery_app.task(bind=True)
 def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> dict:
     """
-    The second and final step. Takes the file path from the crawl task,
+    The second step in the main audit. Takes the file path from the crawl task,
     reads the advertools crawl data, transforms it into our desired report
-    format, and saves it to the database.
+    format, saves that initial report to the database, and then kicks off
+    the external link check.
     """
     logger.info(f"Compiling report for audit_id: {audit_id} from file: {crawl_output_file}")
 
@@ -204,19 +206,55 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
     
     referer_col = 'request_headers_Referer'
     if referer_col in broken_links_df.columns:
+        # Before creating the report, replace any pandas NaN/NaT values in the
+        # source_url column with None, which serializes to 'null' in JSON.
+        # This prevents database errors for broken pages that have no referrer.
         broken_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
+        broken_links_df['source_url'] = broken_links_df['source_url'].where(pd.notna(broken_links_df['source_url']), None)
         broken_links_report = broken_links_df[['url', 'status', 'source_url']].to_dict('records')
     else:
         broken_links_report = broken_links_df[['url', 'status']].to_dict('records')
 
-    # --- Section 3: Assemble the final, structured report ---
+    # --- Section 3: Extract external links for the next step ---
+    # To get the domain for our internal link regex, we parse the first URL
+    # in the crawl data, which is the starting URL.
+    try:
+        main_domain = urlparse(crawl_df['url'][0]).netloc
+        link_df = adv.crawlytics.links(crawl_df, internal_url_regex=main_domain)
+        
+        # Filter for external links
+        external_links_df = link_df[~link_df['internal']].copy()
+
+        # --- Data Cleaning & Structuring ---
+        # Clean the DataFrame by removing rows with missing links and ensure all
+        # link data is string type to prevent errors.
+        # We also rename the 'url' column from crawlytics (which is the source page)
+        # to 'source_url' for clarity and select the columns we need.
+        external_links_df.dropna(subset=['link'], inplace=True)
+        external_links_df['link'] = external_links_df['link'].astype(str)
+        
+        # Create a list of dicts to pass to the next task, preserving the source.
+        links_to_check = external_links_df.rename(
+            columns={'url': 'source_url'}
+        )[['link', 'source_url']].to_dict('records')
+
+        # For logging, we still want a unique count.
+        unique_links = len(external_links_df['link'].unique())
+        logger.info(f"Found {unique_links} unique external links to check for audit_id: {audit_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to extract external links for audit_id {audit_id}: {e}", exc_info=True)
+        links_to_check = []
+        
+
+    # --- Section 4: Assemble the final, structured report ---
     total_pages = len(page_level_report)
     final_report = {
-        "status": "COMPLETE",
+        "status": "ANALYSIS_COMPLETE", # This is now an intermediate status
         "audit_id": audit_id,
         "summary": {
             "total_pages_analyzed": total_pages,
-            "broken_links_found": len(broken_links_report),
+            "internal_broken_links_found": len(broken_links_report),
             "pages_missing_title": total_pages - pages_with_title,
             "pages_missing_meta_description": total_pages - pages_with_meta_desc,
             "pages_with_correct_h1": pages_with_one_h1,
@@ -225,46 +263,252 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
             "top_10_title_words": _get_top_words(crawl_df['title']),
             "top_10_h1_words": _get_top_words(crawl_df['h1']),
         },
-        "broken_links": broken_links_report,
+        "internal_broken_links": broken_links_report,
         "page_level_report": page_level_report
     }
 
-    # Update Database
+    # --- Section 5: Save intermediate report and pass data to the next task ---
     db = SessionLocal()
     try:
         audit = db.query(Audit).filter(Audit.id == audit_id).first()
         if audit:
-            audit.status = "COMPLETE"
+            audit.status = "ANALYZING_EXTERNAL" # New intermediate status
             audit.report_json = final_report
-            audit.completed_at = datetime.datetime.utcnow()
             db.commit()
-            logger.info(f"Successfully saved report for audit_id: {audit_id}")
+            logger.info(f"Successfully saved initial report for audit_id: {audit_id}")
     finally:
         db.close()
     
-    # Clean up the crawl files
-    try:
-        os.remove(crawl_output_file)
-        # We are intentionally NOT deleting the log file. It's a valuable
-        # artifact for debugging any crawl or analysis issues.
-    except OSError as e:
-        logger.warning(f"Error cleaning up result file for audit_id {audit_id}: {e}")
+    # Pass the crawl file path and the list of links to the next task in the chain.
+    return {"crawl_output_file": crawl_output_file, "links_to_check": links_to_check}
 
-    return final_report
+@celery_app.task(bind=True)
+def check_external_links(self, previous_task_output: dict, audit_id: int) -> dict:
+    """
+    Checks the status of all external links found during the crawl.
+
+    This task receives a list of external links, uses the efficient `crawl_headers`
+    function to make HEAD requests, and identifies any links that return a
+    client or server error (4xx or 5xx status codes).
+    """
+    links_to_check = previous_task_output.get('links_to_check', [])
+    crawl_output_file = previous_task_output.get('crawl_output_file')
+
+    if not links_to_check:
+        logger.info(f"No external links to check for audit_id: {audit_id}. Skipping.")
+        return {"external_links_report": {}, "crawl_output_file": crawl_output_file}
+
+    # Create a DataFrame from the input list of dictionaries.
+    links_df = pd.DataFrame(links_to_check)
+    
+    # Get a unique list of URLs to check to avoid redundant requests.
+    unique_urls_to_check = links_df['link'].unique().tolist()
+    
+    logger.info(f"Checking {len(unique_urls_to_check)} unique external links for audit_id: {audit_id}")
+    
+    # Define a temporary file for the header crawl results.
+    os.makedirs('results', exist_ok=True)
+    headers_output_file = f"results/headers_results_{audit_id}.jl"
+
+    # --- Learning Note: DNS Timeouts ---
+    # `DOWNLOAD_TIMEOUT` is crucial for performance. When checking thousands of
+    # external links, some domains may not exist or have DNS issues. Without a
+    # timeout, the crawler could hang for a long time on each one. Setting a
+    # reasonable timeout (e.g., 10-15 seconds) ensures the process moves on.
+    # `DNS_TIMEOUT` specifically handles the time to wait for a DNS lookup.
+    custom_settings = {
+        'ROBOTSTXT_OBEY': False, # External sites' robots.txt are not relevant here
+        'USER_AGENT': 'Python-SEOAuditAgent/1.0 (External Link Checker)',
+        'DOWNLOAD_TIMEOUT': 15,
+        'DNS_TIMEOUT': 10,
+    }
+
+    external_links_report = {
+        "unreachable_links": [],
+        "broken_links": [],
+        "permission_issues": [],
+        "method_issues": [],
+        "other_client_errors": []
+    }
+
+    try:
+        adv.crawl_headers(unique_urls_to_check, headers_output_file, custom_settings=custom_settings)
+        headers_df = pd.read_json(headers_output_file, lines=True)
+
+        # --- Data Cleaning: Handle Network/DNS Failures ---
+        # If the crawler fails to get a response (e.g., DNS error), the status
+        # will be NaN. We fill these with a placeholder (-1) to represent an
+        # "unreachable" link and prevent crashes during type conversion.
+        if 'status' in headers_df.columns:
+            headers_df['status'].fillna(-1, inplace=True)
+            headers_df['status'] = headers_df['status'].astype(int)
+        else:
+            # If there's no status column at all, create it and fill with -1.
+            # This can happen if every single request fails at the network level.
+            headers_df['status'] = -1
+
+        # --- Learning Notes: Categorizing HTTP Errors ---
+        # Instead of treating all 4xx/5xx errors as "broken", we now categorize
+        # them to provide a more accurate and actionable report.
+        # - -1 (Our custom code): Unreachable links (DNS/network errors).
+        # - 404/410: Truly broken links. The resource does not exist.
+        # - 403: Permission issue. The server is blocking our crawler. The link
+        #   is likely fine for human users.
+        # - 405: Method Not Allowed. Our checker used a method (HEAD) that the
+        #   server doesn't support for that URL. The link is likely fine.
+        # - Other 4xx: Catch-all for other client-side errors.
+        
+        # We now consider any non-2xx/3xx status as an "error" to be categorized
+        error_headers_df = headers_df[~headers_df['status'].between(200, 399)].copy()
+
+        # Merge with original links_df to get the source_url for each error
+        report_df = pd.merge(
+            links_df,
+            error_headers_df[['url', 'status']],
+            left_on='link',
+            right_on='url',
+            how='inner'
+        ).rename(columns={'link': 'url_to'}) # Rename to avoid confusion with source 'url'
+        
+        # Now, iterate through the merged DataFrame to categorize
+        for _, row in report_df.iterrows():
+            status = row['status']
+            # For unreachable links, the status is our placeholder, so we don't
+            # include it in the report for clarity.
+            if status == -1:
+                link_info = {'url': row['url_to'], 'status': 'Unreachable', 'source_url': row['source_url']}
+                external_links_report["unreachable_links"].append(link_info)
+            else:
+                link_info = {'url': row['url_to'], 'status': status, 'source_url': row['source_url']}
+                if status in [404, 410]:
+                    external_links_report["broken_links"].append(link_info)
+                elif status == 403:
+                    external_links_report["permission_issues"].append(link_info)
+                elif status == 405:
+                    external_links_report["method_issues"].append(link_info)
+                elif 400 <= status < 500: # Catch other 4xx errors
+                    external_links_report["other_client_errors"].append(link_info)
+
+        logger.info(
+            f"External link check complete for audit_id: {audit_id}. "
+            f"Found: {len(external_links_report['unreachable_links'])} unreachable, "
+            f"{len(external_links_report['broken_links'])} broken, "
+            f"{len(external_links_report['permission_issues'])} permission issues, "
+            f"{len(external_links_report['method_issues'])} method issues."
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to check external links for audit_id {audit_id}: {e}", exc_info=True)
+        # Return empty report on failure
+        external_links_report = {key: [] for key in external_links_report}
+    finally:
+        # Clean up the temporary header results file
+        if os.path.exists(headers_output_file):
+            try:
+                os.remove(headers_output_file)
+    except OSError as e:
+                logger.warning(f"Error cleaning up headers file {headers_output_file}: {e}")
+
+    return {"external_links_report": external_links_report, "crawl_output_file": crawl_output_file}
+
+@celery_app.task(bind=True)
+def save_final_report(self, previous_task_output: dict, audit_id: int):
+    """
+    Saves the final, complete report to the database.
+
+    This is the last step. It merges the results from the external link check
+    into the main report, updates the audit status to COMPLETE, and cleans up
+    any remaining temporary files.
+    """
+    logger.info(f"Saving final report for audit_id: {audit_id}")
+    
+    external_links_report = previous_task_output.get('external_links_report', {})
+    crawl_output_file = previous_task_output.get('crawl_output_file')
+
+    # Ensure we have a default structure if the report is missing
+    unreachable_links = external_links_report.get('unreachable_links', [])
+    broken_links = external_links_report.get('broken_links', [])
+    permission_issues = external_links_report.get('permission_issues', [])
+    method_issues = external_links_report.get('method_issues', [])
+    other_client_errors = external_links_report.get('other_client_errors', [])
+
+    db = SessionLocal()
+    try:
+        audit = db.query(Audit).filter(Audit.id == audit_id).first()
+        if not audit:
+            logger.error(f"Audit with ID {audit_id} not found for final save.")
+            return
+
+        # Get the intermediate report that was saved earlier.
+        # We explicitly copy it to avoid modifying the object in-place.
+        report_json = audit.report_json.copy()
+
+        # Update summary with the new, detailed external link counts.
+        summary = report_json["summary"]
+        summary["external_unreachable_links_found"] = len(unreachable_links)
+        summary["external_broken_links_found"] = len(broken_links)
+        summary["external_permission_issues_found"] = len(permission_issues)
+        summary["external_method_issues_found"] = len(method_issues)
+        summary["external_other_client_errors_found"] = len(other_client_errors)
+
+        # --- Re-order the report for better readability ---
+        # Create a new dictionary with the desired key order, adding the
+        # new categorized link lists.
+        final_report = {
+            "status": "COMPLETE",
+            "audit_id": audit.id,
+            "summary": summary,
+            "external_unreachable_links": unreachable_links,
+            "external_broken_links": broken_links,
+            "external_permission_issue_links": permission_issues,
+            "external_method_issue_links": method_issues,
+            "external_other_client_errors": other_client_errors,
+            "internal_broken_links": report_json["internal_broken_links"],
+            "page_level_report": report_json["page_level_report"]
+        }
+        
+        # Update the audit record with the final, re-ordered report.
+        audit.report_json = final_report
+        audit.status = "COMPLETE"
+        audit.completed_at = datetime.datetime.utcnow()
+        db.commit()
+        logger.info(f"Successfully saved final report for audit_id: {audit_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to save final report for audit_id {audit_id}: {e}", exc_info=True)
+        if audit:
+            audit.status = "ERROR"
+            db.commit()
+    finally:
+        db.close()
+
+    # Final cleanup of the main crawl file.
+    if crawl_output_file and os.path.exists(crawl_output_file):
+        try:
+            os.remove(crawl_output_file)
+            logger.info(f"Cleaned up main crawl file: {crawl_output_file}")
+        except OSError as e:
+            logger.warning(f"Error cleaning up main crawl file {crawl_output_file}: {e}")
+
+    return {"status": "SUCCESS", "audit_id": audit_id}
 
 @celery_app.task(bind=True)
 def run_full_audit(self, audit_id: int, url: str, max_pages: int = 100):
     """
-    The main orchestrator task that chains together the audit process.
-    It starts with a crawl and then compiles the report.
+    The main orchestrator task that chains together the full audit process.
+    1. Crawl the site.
+    2. Compile the main (internal) report.
+    3. Check all discovered external links.
+    4. Save the final combined report.
     """
     logger.info(f"Launched audit workflow for url: {url} (Audit ID: {audit_id})")
-    # This chain ensures that the report compilation task only runs after the
-    # crawl task has successfully completed and passed its output file path.
-    # The `s()` signature creates a 'subtask' that can be part of a chain.
+    # This chain ensures that each task runs in sequence, passing its output
+    # to the next task in the chain.
     task_chain = chain(
-        run_advertools_crawl.s(audit_id, url, max_pages),
-        compile_report_from_crawl.s(audit_id)
+        run_advertools_crawl.s(audit_id=audit_id, url=url, max_pages=max_pages),
+        compile_report_from_crawl.s(audit_id=audit_id),
+        check_external_links.s(audit_id=audit_id),
+        save_final_report.s(audit_id=audit_id)
     )
     task_chain.apply_async()
     return {'message': 'Audit workflow successfully launched.'}
