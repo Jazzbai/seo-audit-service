@@ -406,7 +406,7 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
         if os.path.exists(headers_output_file):
             try:
                 os.remove(headers_output_file)
-    except OSError as e:
+            except OSError as e:
                 logger.warning(f"Error cleaning up headers file {headers_output_file}: {e}")
 
     return {"external_links_report": external_links_report, "crawl_output_file": crawl_output_file}
