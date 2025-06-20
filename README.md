@@ -71,21 +71,13 @@ This is the most direct way to run the agent for development and testing.
 
 4.  **Create the `.env` File**
 
-    Create a file named `.env` in the project root. For local development, the host for your database and broker will be `localhost`.
-
-    ```dotenv
-    # .env file for Local Development
-
-    # 1. Broker URL for RabbitMQ
-    BROKER_URL="amqp://guest:guest@localhost:5672//"
-
-    # 2. Celery Result Backend (PostgreSQL)
-    RESULT_BACKEND="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/seo_audit_db"
-
-    # 3. Main Application Database (SQLAlchemy)
-    DATABASE_URL="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/seo_audit_db"
+    Copy the example environment file `.env.example` to a new file named `.env`.
+    ```bash
+    cp .env.example .env
     ```
-    *Note: Remember to create the `seo_audit_db` database in PostgreSQL and use your actual user and password.*
+    Then, update the new `.env` file with the correct credentials for your local PostgreSQL instance. You will need to replace `your_db_user` and `your_db_password`.
+
+    *Note: Remember to create the `seo_audit_db` database in PostgreSQL beforehand.*
 
 5.  **Run Database Migrations**
 
@@ -120,28 +112,19 @@ This method uses Docker and Docker Compose to build and run the entire applicati
 
 1.  **Create the `.env` File for Docker**
 
-    The only difference when using Docker is that the hostnames for the services are the names defined in `docker-compose.yml` (e.g., `postgres-db`, `rabbitmq`).
-
-    ```dotenv
-    # .env file for Docker
-
-    BROKER_URL="amqp://guest:guest@rabbitmq:5672//"
-    RESULT_BACKEND="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
-    DATABASE_URL="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
+    Copy the example environment file `.env.example` to a new file named `.env`.
+    ```bash
+    cp .env.example .env
     ```
+    The default values in `.env.example` are already configured for the Docker setup. You should not need to make any changes unless you modify the `POSTGRES_PASSWORD` in the `docker-compose.yml` file, in which case they must match.
 
 2.  **Build and Run the Containers**
     ```bash
     docker-compose up --build
     ```
-    This command builds the images and starts all services. The API will be available at `http://127.0.0.1:8000`.
+    This single command builds the Docker images and starts all services.
 
-3.  **Run Database Migrations (in Docker)**
-
-    Open a new terminal and run the migrations inside the running `fastapi-app` container.
-    ```bash
-    docker-compose exec fastapi-app alembic upgrade head
-    ```
+    Database migrations are now run automatically by the `fastapi-app` container upon startup, so no separate migration command is needed. The API will be available at `http://127.0.0.1:8000` once the services are running.
 
 ## Using the API
 
