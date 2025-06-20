@@ -9,34 +9,32 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# --- Start of Centralized Configuration ---
+# --- Centralized Configuration ---
 
-# Construct the absolute path to the project root directory
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
-# Add the project root to the Python path
+# Add the project's root directory to the Python path
+# This ensures that the 'app' module can be imported
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
-# Construct the absolute path to the .env file and load it
-dotenv_path = os.path.join(project_root, '.env')
-if os.path.exists(dotenv_path):
-    load_dotenv(dotenv_path=dotenv_path)
-else:
-    print(f"Warning: .env file not found at {dotenv_path}")
+# Load the .env file from the project root to make environment variables available
+# This is the single source of truth for configuration.
+load_dotenv(os.path.join(project_root, '.env'))
 
-# --- End of Centralized Configuration ---
+# --- Alembic Configuration ---
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# --- Centralized Configuration for Alembic ---
-
-# Set the DATABASE_URL environment variable from the alembic.ini file
-# This makes our application's db session code compatible with Alembic.
-db_url = config.get_main_option("sqlalchemy.url")
-if db_url:
-    os.environ['DATABASE_URL'] = db_url
+# Set the database URL from the environment variable.
+# This ensures Alembic uses the same database as the main application.
+# It's critical for consistency between the app and migrations.
+database_url = os.getenv('DATABASE_URL')
+if database_url:
+    config.set_main_option('sqlalchemy.url', database_url)
+else:
+    print("Error: DATABASE_URL not set in .env file. Alembic cannot run.")
+    sys.exit(1)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -49,7 +47,10 @@ from app.db.session import Base
 from app.models.audit import Audit  # noqa
 target_metadata = Base.metadata
 
-# --- End of Configuration ---
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.

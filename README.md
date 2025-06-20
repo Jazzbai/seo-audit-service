@@ -33,84 +33,115 @@ The agent is composed of several key components that run in separate Docker cont
 4.  **PostgreSQL (`postgres-db`)**: The main application database. It stores the overall status of each audit job and the final, compiled JSON report via the `Audit` SQLAlchemy model. It also serves as the Celery Result Backend.
 5.  **Alembic**: Handles database schema migrations, ensuring the database schema is up-to-date with the models.
 
-## Setup and Installation
+## Setup and Running
 
-### Prerequisites
+This project can be run locally for development or as a fully containerized application using Docker Compose for production. The recommended approach for development and testing is the local setup.
 
+### 1. Local Development Setup
+
+This is the most direct way to run the agent for development and testing.
+
+**Prerequisites:**
+- **Python 3.12**
+- **PostgreSQL**: Must be installed and running.
+- **RabbitMQ**: Must be installed and running.
+- **Alembic**: For database migrations.
+
+*Learning Note: For convenience, you can still use Docker to easily run PostgreSQL and RabbitMQ locally without installing them on your system. You can use the `postgres-db` and `rabbitmq` services from the `docker-compose.yml` file and just run the FastAPI application on your host machine.*
+
+**Steps:**
+
+1.  **Clone the Repository**
+    ```bash
+    git clone <repository-url>
+    cd seo-audit
+    ```
+
+2.  **Create and Activate Virtual Environment**
+    ```bash
+    python -m venv venv
+    source venv/bin/activate      # On macOS/Linux
+    # venv\Scripts\activate       # On Windows
+    ```
+
+3.  **Install Dependencies**
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4.  **Create the `.env` File**
+
+    Create a file named `.env` in the project root. For local development, the host for your database and broker will be `localhost`.
+
+    ```dotenv
+    # .env file for Local Development
+
+    # 1. Broker URL for RabbitMQ
+    BROKER_URL="amqp://guest:guest@localhost:5672//"
+
+    # 2. Celery Result Backend (PostgreSQL)
+    RESULT_BACKEND="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/seo_audit_db"
+
+    # 3. Main Application Database (SQLAlchemy)
+    DATABASE_URL="postgresql+psycopg://your_db_user:your_db_password@localhost:5432/seo_audit_db"
+    ```
+    *Note: Remember to create the `seo_audit_db` database in PostgreSQL and use your actual user and password.*
+
+5.  **Run Database Migrations**
+
+    With your `.env` file configured, run the Alembic migrations to set up your database schema.
+    ```bash
+    alembic upgrade head
+    ```
+
+6.  **Run the Application**
+
+    You need to run two processes in separate terminals: the FastAPI web server and the Celery worker.
+
+    - **Terminal 1: Run FastAPI Server**
+      ```bash
+      uvicorn app.main:app --reload
+      ```
+      The API will be available at `http://127.0.0.1:8000`.
+
+    - **Terminal 2: Run Celery Worker**
+      ```bash
+      celery -A app.celery_app.celery worker --loglevel=info
+      ```
+
+### 2. Production Setup with Docker
+
+This method uses Docker and Docker Compose to build and run the entire application stack in isolated containers. This is the recommended approach for production.
+
+**Prerequisites:**
 - **Docker** and **Docker Compose**
-- **Python 3.12** (for local development and `pip freeze`)
 
-### 1. Clone the Repository
+**Steps:**
 
-```bash
-git clone <repository-url>
-cd seo-audit
-```
+1.  **Create the `.env` File for Docker**
 
-### 2. Create the Environment File
+    The only difference when using Docker is that the hostnames for the services are the names defined in `docker-compose.yml` (e.g., `postgres-db`, `rabbitmq`).
 
-This project uses a `.env` file to manage environment variables. Create a file named `.env` in the project root by copying the example.
+    ```dotenv
+    # .env file for Docker
 
-```bash
-# In a real project, you would have a .env.example file.
-# For now, create .env and add the following content:
-```
+    BROKER_URL="amqp://guest:guest@rabbitmq:5672//"
+    RESULT_BACKEND="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
+    DATABASE_URL="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
+    ```
 
-```dotenv
-# .env file
+2.  **Build and Run the Containers**
+    ```bash
+    docker-compose up --build
+    ```
+    This command builds the images and starts all services. The API will be available at `http://127.0.0.1:8000`.
 
-# 1. Broker URL for RabbitMQ
-# This is the default for the RabbitMQ container in docker-compose.
-BROKER_URL="amqp://guest:guest@rabbitmq:5672//"
+3.  **Run Database Migrations (in Docker)**
 
-# 2. Celery Result Backend URL
-# This uses the PostgreSQL container.
-# Format: postgresql+psycopg://<user>:<password>@<host>:<port>/<db_name>
-RESULT_BACKEND="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
-
-# 3. Main Application Database URL (for SQLAlchemy)
-DATABASE_URL="postgresql+psycopg://seo_audit_user:your_strong_password@postgres-db:5432/seo_audit_db"
-```
-
-**Note:** The `DATABASE_URL` and `RESULT_BACKEND` use the service name `postgres-db` as the host, which is how Docker Compose networking resolves the container's IP address.
-
-### 3. Freeze Dependencies (Best Practice)
-
-For a stable and reproducible environment, it's best to "freeze" the exact versions of all Python packages.
-
-```bash
-# First, ensure you are in the correct virtual environment
-python -m venv venv-py312
-source venv-py312/bin/activate  # On macOS/Linux
-# venv-py312\Scripts\activate  # On Windows
-
-# Install dependencies if you haven't
-pip install -r requirements.txt
-
-# Now, freeze the exact versions
-pip freeze > requirements.txt
-```
-
-## How to Run the Agent
-
-With Docker and Docker Compose, running the entire application stack is a single command.
-
-```bash
-docker-compose up --build
-```
-
-This command will:
-1.  Build the `fastapi-app` and `celery-worker` Docker images based on the `Dockerfile`.
-2.  Start containers for the FastAPI app, Celery worker, PostgreSQL, and RabbitMQ.
-3.  The API will be available at `http://127.0.0.1:8000`.
-
-### Running Database Migrations
-
-After starting the application for the first time, you may need to run the database migrations to create the necessary tables. Open a new terminal and run:
-
-```bash
-docker-compose exec fastapi-app alembic upgrade head
-```
+    Open a new terminal and run the migrations inside the running `fastapi-app` container.
+    ```bash
+    docker-compose exec fastapi-app alembic upgrade head
+    ```
 
 ## Using the API
 
@@ -230,12 +261,16 @@ The response will contain the full, detailed report with our new categorized lin
 
 ### Viewing Raw Celery Task Results
 
-The project includes a utility script, `view_result.py`, to fetch the raw result of a specific Celery task directly from the result backend. This is useful for debugging individual task failures if they don't complete successfully.
+The project includes a utility script, `view_result.py`, to fetch the raw result of a specific Celery task directly from the result backend. This is useful for debugging individual task failures.
 
 **Usage:**
 
-Run this command from within the running `fastapi-app` container:
+- **Local Development:** Run the script directly with your virtual environment activated.
+  ```bash
+  python view_result.py <celery_task_id>
+  ```
 
-```bash
-docker-compose exec fastapi-app python view_result.py <celery_task_id>
-``` 
+- **Docker:** Run the script inside the `fastapi-app` container.
+  ```bash
+  docker-compose exec fastapi-app python view_result.py <celery_task_id>
+  ``` 

@@ -1,6 +1,23 @@
 version: '3.8'
 
 services:
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: postgres-db
+    environment:
+      - POSTGRES_USER=seo_audit_user
+      - POSTGRES_PASSWORD=your_strong_password
+      - POSTGRES_DB=seo_audit_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seo_audit_user -d seo_audit_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   rabbitmq:
     image: "rabbitmq:3-management-alpine"
     container_name: "rabbitmq"
@@ -13,14 +30,14 @@ services:
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 30s
-      timeout: 30s
-      retries: 3
+      timeout: 10s
+      retries: 5
     # Note: For production, you would use persistent volumes to store data.
     # For local development, this is not strictly necessary.
 
   web:
     build: .
-    container_name: "seo_audit_web"
+    container_name: "fastapi-app"
     ports:
       - "8000:8000"
     volumes:
@@ -28,20 +45,27 @@ services:
     env_file:
       - .env
     command: >
-      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     depends_on:
       rabbitmq:
-        condition: service_healthy # Waits for RabbitMQ to be ready
+        condition: service_healthy
+      postgres-db:
+        condition: service_healthy
 
   worker:
     build: .
-    container_name: "seo_audit_worker"
+    container_name: "celery-worker"
     volumes:
       - .:/app # Also mount for live reloading
     env_file:
       - .env
     command: >
-      sh -c "celery -A workers.celery_app worker --loglevel=info"
+      sh -c "celery -A app.celery_app.celery worker --loglevel=info"
     depends_on:
       rabbitmq:
-        condition: service_healthy # Also waits for RabbitMQ 
+        condition: service_healthy
+      postgres-db:
+        condition: service_healthy
+
+volumes:
+  postgres_data: 
