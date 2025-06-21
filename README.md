@@ -74,18 +74,48 @@ This approach is for developers who want to run the Python services directly on 
 
 **Prerequisites:**
 - **Python 3.12**
-- **Docker** and **Docker Compose** (to run backing services)
+- **PostgreSQL**: A running instance is required. See database setup notes below.
+- **RabbitMQ**: A running instance is required.
+- **Docker** and **Docker Compose** (can be used to run Postgres and RabbitMQ easily)
 
 **Steps:**
 
-1.  **Start Backing Services**
+1.  **Prepare Backing Services**
 
-    Start *only* the database and message broker from the `docker-compose.yml` file.
+    You can run PostgreSQL and RabbitMQ natively on your machine, or you can use Docker to easily run them.
+
+    *Using Docker (Recommended for simplicity):*
     ```bash
     docker-compose up -d postgres-db rabbitmq
     ```
+    *Manual Installation:* Ensure both services are installed and running on their default ports.
 
-2.  **Create and Activate Virtual Environment**
+2.  **Create the Database and User (Manual PostgreSQL Setup)**
+    
+    If you are running PostgreSQL locally (not in Docker), you will need to manually create the database and user required by the application.
+    
+    Connect to PostgreSQL using the `psql` command-line tool:
+    ```bash
+    psql -U postgres
+    ```
+    
+    Then, run the following SQL commands one by one. These commands create the user and database as defined in the `.env.example` file. **Remember to use the same password you plan to set in your `.env` file.**
+
+    ```sql
+    -- Create a dedicated user for the application
+    CREATE USER seo_audit_user WITH PASSWORD 'your_strong_password';
+
+    -- Create the database
+    CREATE DATABASE seo_audit_db;
+
+    -- Grant all privileges on the new database to the new user
+    GRANT ALL PRIVILEGES ON DATABASE seo_audit_db TO seo_audit_user;
+
+    -- Exit the psql client
+    \q
+    ```
+
+3.  **Create and Activate Virtual Environment**
 
     It's crucial to use a virtual environment to manage dependencies.
 
@@ -108,25 +138,25 @@ This approach is for developers who want to run the Python services directly on 
     ```
     Your terminal prompt should now be prefixed with `(venv)`.
 
-3.  **Install Dependencies**
+4.  **Install Dependencies**
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Configure the `.env` File**
+5.  **Configure the `.env` File**
 
     Create the `.env` file if you haven't already (`cp .env.example .env`). **Crucially, you must edit it** to point to your local services.
     - Change `postgres-db` and `rabbitmq` to `localhost`.
     - Set your `API_KEY` and desired `API_PORT`.
 
-5.  **Run Database Migrations**
+6.  **Run Database Migrations**
 
     Apply any pending database migrations.
     ```bash
     alembic upgrade head
     ```
 
-6.  **Run the Application**
+7.  **Run the Application**
 
     You need to run two processes in separate terminals (both with the `venv` activated).
 
