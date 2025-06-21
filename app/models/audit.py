@@ -12,5 +12,9 @@ class Audit(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
+    # New fields to associate the audit with the requesting user/dashboard
+    user_id = Column(String, nullable=True, index=True)
+    user_audit_report_request_id = Column(String, nullable=True, index=True)
+
     def __repr__(self):
         return f"<Audit(id={self.id}, url='{self.url}', status='{self.status}')>" 

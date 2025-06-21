@@ -11,6 +11,7 @@ from app.celery_app import celery_app
 from app.tasks.orchestrator import run_full_audit
 from app.db.session import get_db, Base, engine
 from app.models.audit import Audit
+from app.api.dependencies import get_api_key
 
 # Load environment variables from .env file
 load_dotenv()
@@ -25,6 +26,8 @@ class AuditRequest(BaseModel):
     """The request model for starting a new audit."""
     url: HttpUrl
     max_pages: Optional[int] = Field(100, description="The maximum number of pages to crawl.")
+    user_id: Optional[str] = None
+    user_audit_report_request_id: Optional[str] = None
 
 class AuditResponse(BaseModel):
     """The response model for a successfully launched audit."""
@@ -34,7 +37,7 @@ class AuditResponse(BaseModel):
 
 class AuditResultResponse(BaseModel):
     """The response model for a retrieved audit result."""
-    audit_id: int = Field(alias="id")
+    audit_id: int = Field(validation_alias="id")
     status: str
     url: str
     created_at: datetime.datetime
@@ -60,7 +63,11 @@ async def root():
     return {"message": "API is running and ready to accept tasks."}
 
 @app.post("/v1/audits", response_model=AuditResponse, status_code=202, tags=["Audits"])
-async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
+async def start_new_audit(
+    request: AuditRequest, 
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key)
+):
     """
     Triggers the full SEO audit workflow.
     
@@ -70,7 +77,12 @@ async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
     url_str = str(request.url)
 
     # 1. Create a record in our database
-    new_audit = Audit(url=url_str, status="PENDING")
+    new_audit = Audit(
+        url=url_str,
+        status="PENDING",
+        user_id=request.user_id,
+        user_audit_report_request_id=request.user_audit_report_request_id
+    )
     db.add(new_audit)
     db.commit()
     db.refresh(new_audit)
@@ -85,7 +97,11 @@ async def start_new_audit(request: AuditRequest, db: Session = Depends(get_db)):
     }
 
 @app.get("/v1/audits/{audit_id}", response_model=AuditResultResponse, tags=["Audits"])
-async def get_audit_result(audit_id: int, db: Session = Depends(get_db)):
+async def get_audit_result(
+    audit_id: int, 
+    db: Session = Depends(get_db),
+    api_key: str = Depends(get_api_key)
+):
     """
     Retrieves the status and results of an audit from the database.
     

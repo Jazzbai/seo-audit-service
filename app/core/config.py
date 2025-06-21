@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
+from typing import Optional
 
 class Settings(BaseSettings):
     """
@@ -12,6 +13,13 @@ class Settings(BaseSettings):
     broker_url: str = Field(..., alias='BROKER_URL')
     result_backend: str = Field(..., alias='RESULT_BACKEND')
     DATABASE_URL: str # This is already uppercase, so no alias needed
+
+    # API Security
+    API_KEY: str = Field(..., alias='API_KEY')
+
+    # Dashboard Callback Settings (Optional)
+    DASHBOARD_CALLBACK_URL: Optional[str] = Field(None, alias='DASHBOARD_CALLBACK_URL')
+    DASHBOARD_API_KEY: Optional[str] = Field(None, alias='DASHBOARD_API_KEY')
 
     # Lowercase Celery settings for modern configuration
     task_serializer: str = 'json'
