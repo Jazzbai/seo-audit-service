@@ -40,6 +40,8 @@ class AuditResultResponse(BaseModel):
     audit_id: int = Field(validation_alias="id")
     status: str
     url: str
+    user_id: Optional[str] = None
+    user_audit_report_request_id: Optional[str] = None
     created_at: datetime.datetime
     completed_at: Optional[datetime.datetime]
     report: Optional[Any] = Field(None, alias="report_json")

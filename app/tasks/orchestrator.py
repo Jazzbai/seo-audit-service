@@ -192,7 +192,7 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
         adv.crawl_headers(unique_urls_to_check, headers_output_file, custom_settings=custom_settings)
         headers_df = pd.read_json(headers_output_file, lines=True)
         if 'status' in headers_df.columns:
-            headers_df['status'].fillna(-1, inplace=True)
+            headers_df['status'] = headers_df['status'].fillna(-1)
             headers_df['status'] = headers_df['status'].astype(int)
         else:
             headers_df['status'] = -1
@@ -241,15 +241,22 @@ def save_final_report(self, previous_task_output: dict, audit_id: int):
             "external_method_issues_found": len(method_issues),
             "external_other_client_errors_found": len(other_client_errors)
         })
-        final_report = {
-            "status": "COMPLETE", "audit_id": audit.id, "summary": summary,
-            "external_unreachable_links": unreachable_links, "external_broken_links": broken_links,
-            "external_permission_issue_links": permission_issues, "external_method_issue_links": method_issues,
-            "external_other_client_errors": other_client_errors, "internal_broken_links": report_json["internal_broken_links"],
+        
+        # This is the final JSON object that will be stored in the database.
+        # It should NOT contain redundant top-level keys like status or audit_id,
+        # as those are separate columns in the 'audits' table.
+        final_report_blob = {
+            "summary": summary,
+            "external_unreachable_links": unreachable_links,
+            "external_broken_links": broken_links,
+            "external_permission_issue_links": permission_issues,
+            "external_method_issue_links": method_issues,
+            "external_other_client_errors": other_client_errors,
+            "internal_broken_links": report_json["internal_broken_links"],
             "page_level_report": report_json["page_level_report"]
         }
         
-        audit.report_json = final_report
+        audit.report_json = final_report_blob
         audit.status = "COMPLETE"
         audit.completed_at = datetime.datetime.utcnow()
         db.commit()
@@ -289,22 +296,17 @@ def send_report_to_dashboard(self, audit_id: int):
             logger.warning("DASHBOARD_CALLBACK_URL or DASHBOARD_API_KEY not set. Skipping callback.")
             return
         
-        # The original full report as stored in the database
-        full_report = audit.report_json.copy()
-
-        # The new report_json for the payload should not contain redundant top-level keys.
-        report_json_for_payload = full_report.copy()
-        report_json_for_payload.pop("status", None)
-        report_json_for_payload.pop("audit_id", None)
-
-        # Reshape the report for the callback payload
+        # The data in audit.report_json is now clean. We construct the payload
+        # using the direct attributes from the model for clarity and consistency.
         callback_payload = {
             "user_id": audit.user_id,
             "user_audit_report_request_id": audit.user_audit_report_request_id,
-            "status": full_report.get("status"),
+            "status": audit.status,
             "audit_id": audit.id,
             "url": audit.url,
-            "report_json": report_json_for_payload
+            "created_at": audit.created_at.isoformat(),
+            "completed_at": audit.completed_at.isoformat() if audit.completed_at else None,
+            "report_json": audit.report_json
         }
 
         headers = {

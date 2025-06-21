@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # API Security
     API_KEY: str = Field(..., alias='API_KEY')
 
+    # API Server Port
+    API_PORT: int = Field(8000, alias='API_PORT')
+
     # Dashboard Callback Settings (Optional)
     DASHBOARD_CALLBACK_URL: Optional[str] = Field(None, alias='DASHBOARD_CALLBACK_URL')
     DASHBOARD_API_KEY: Optional[str] = Field(None, alias='DASHBOARD_API_KEY')
