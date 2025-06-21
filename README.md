@@ -35,19 +35,14 @@ The agent is composed of several key components that run in separate Docker cont
 
 ## Setup and Running
 
-This project can be run locally for development or as a fully containerized application using Docker Compose for production. The recommended approach for development and testing is the local setup.
+This project is designed to be run with Docker Compose, which simplifies setup. However, you can also run the services locally for development.
 
-### 1. Local Development Setup
+### 1. Recommended Setup with Docker Compose
 
-This is the most direct way to run the agent for development and testing.
+This is the easiest and recommended way to get started. It runs all services (FastAPI, Celery, Postgres, RabbitMQ) in isolated containers.
 
 **Prerequisites:**
-- **Python 3.12**
-- **PostgreSQL**: Must be installed and running.
-- **RabbitMQ**: Must be installed and running.
-- **Alembic**: For database migrations.
-
-*Learning Note: For convenience, you can still use Docker to easily run PostgreSQL and RabbitMQ locally without installing them on your system. You can use the `postgres-db` and `rabbitmq` services from the `docker-compose.yml` file and just run the FastAPI application on your host machine.*
+- **Docker** and **Docker Compose**
 
 **Steps:**
 
@@ -57,132 +52,147 @@ This is the most direct way to run the agent for development and testing.
     cd seo-audit
     ```
 
-2.  **Create and Activate Virtual Environment**
+2.  **Create and Configure the `.env` File**
+
+    Copy the example file to `.env`. This file holds all your configuration.
     ```bash
-    python -m venv venv
-    source venv/bin/activate      # On macOS/Linux
-    # venv\Scripts\activate       # On Windows
+    cp .env.example .env
     ```
+    Open the new `.env` file and **set a secure `API_KEY`**. You can also change the `API_PORT` if the default `8001` conflicts with another service.
+
+3.  **Build and Run the Containers**
+    ```bash
+    docker-compose up --build
+    ```
+    This single command builds the Docker images and starts all services. Database migrations are run automatically by the `web` service on startup.
+
+    The API will be available at `http://127.0.0.1:8001` (or your custom port).
+
+### 2. Manual Local Setup (Advanced)
+
+This approach is for developers who want to run the Python services directly on their host machine while using Docker for backing services like Postgres and RabbitMQ.
+
+**Prerequisites:**
+- **Python 3.12**
+- **Docker** and **Docker Compose** (to run backing services)
+
+**Steps:**
+
+1.  **Start Backing Services**
+
+    Start *only* the database and message broker from the `docker-compose.yml` file.
+    ```bash
+    docker-compose up -d postgres-db rabbitmq
+    ```
+
+2.  **Create and Activate Virtual Environment**
+
+    It's crucial to use a virtual environment to manage dependencies.
+
+    *On Windows (using PowerShell):*
+    ```powershell
+    # Create the venv using Python 3.12
+    py -3.12 -m venv venv
+
+    # Activate it
+    .\venv\Scripts\Activate.ps1
+    ```
+
+    *On macOS / Linux:*
+    ```bash
+    # Create the venv using Python 3.12
+    python3.12 -m venv venv
+
+    # Activate it
+    source venv/bin/activate
+    ```
+    Your terminal prompt should now be prefixed with `(venv)`.
 
 3.  **Install Dependencies**
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Create the `.env` File**
+4.  **Configure the `.env` File**
 
-    Copy the example environment file `.env.example` to a new file named `.env`.
-    ```bash
-    cp .env.example .env
-    ```
-    Then, update the new `.env` file with the correct credentials for your local PostgreSQL instance. You will need to replace `your_db_user` and `your_db_password`.
-
-    *Note: Remember to create the `seo_audit_db` database in PostgreSQL beforehand.*
+    Create the `.env` file if you haven't already (`cp .env.example .env`). **Crucially, you must edit it** to point to your local services.
+    - Change `postgres-db` and `rabbitmq` to `localhost`.
+    - Set your `API_KEY` and desired `API_PORT`.
 
 5.  **Run Database Migrations**
 
-    With your `.env` file configured, run the Alembic migrations to set up your database schema.
+    Apply any pending database migrations.
     ```bash
     alembic upgrade head
     ```
 
 6.  **Run the Application**
 
-    You need to run two processes in separate terminals: the FastAPI web server and the Celery worker.
+    You need to run two processes in separate terminals (both with the `venv` activated).
 
     - **Terminal 1: Run FastAPI Server**
       ```bash
-      uvicorn app.main:app --reload
+      # The port will be controlled by the API_PORT in your .env file
+      uvicorn app.main:app --reload --port 8001
       ```
-      The API will be available at `http://127.0.0.1:8000`.
 
     - **Terminal 2: Run Celery Worker**
       ```bash
-      celery -A app.celery_app.celery worker --loglevel=info
+      # Use the thread pool for better performance on Windows for I/O tasks
+      celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info
       ```
-
-### 2. Production Setup with Docker
-
-This method uses Docker and Docker Compose to build and run the entire application stack in isolated containers. This is the recommended approach for production.
-
-**Prerequisites:**
-- **Docker** and **Docker Compose**
-
-**Steps:**
-
-1.  **Create the `.env` File for Docker**
-
-    Copy the example environment file `.env.example` to a new file named `.env`.
-    ```bash
-    cp .env.example .env
-    ```
-    The default values in `.env.example` are already configured for the Docker setup. You should not need to make any changes unless you modify the `POSTGRES_PASSWORD` in the `docker-compose.yml` file, in which case they must match.
-
-2.  **Build and Run the Containers**
-    ```bash
-    docker-compose up --build
-    ```
-    This single command builds the Docker images and starts all services.
-
-    Database migrations are now run automatically by the `fastapi-app` container upon startup, so no separate migration command is needed. The API will be available at `http://127.0.0.1:8000` once the services are running.
 
 ## Using the API
 
-You can interact with the API using tools like `curl`, Postman, or the auto-generated interactive documentation.
+You can interact with the API using tools like `curl`, Postman, or the auto-generated interactive documentation. The API is protected, so you must include your `API_KEY`.
 
-**Interactive Docs**: `http://127.0.0.1:8000/docs`
+**Interactive Docs**: `http://127.0.0.1:8001/docs` (or your custom port)
 
 ### 1. Start a New Audit
 
-Send a `POST` request to the `/v1/audits` endpoint with the URL you want to analyze.
+Send a `POST` request to `/v1/audits`.
 
 **Example Request:**
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/v1/audits" \
+curl -X POST "http://127.0.0.1:8001/v1/audits" \
 -H "Content-Type: application/json" \
+-H "X-API-KEY: your_secret_api_key_here" \
 -d '{
-  "url": "https://textennis.com/privacy-policy/",
-  "max_pages": 20
+  "url": "https://textennis.com/",
+  "max_pages": 20,
+  "user_id": "user-123",
+  "user_audit_report_request_id": "request-abc-789"
 }'
-```
-
-**Example Response (`202 Accepted`):**
-
-This response confirms the audit has been accepted and provides the ID to track it.
-
-```json
-{
-  "audit_id": 119,
-  "task_id": "36c8bb14-546d-48ba-ad19-5030005fcf06",
-  "status": "PENDING"
-}
 ```
 
 ### 2. Retrieve the Audit Report
 
-Use the `audit_id` from the previous step to fetch the full report with a `GET` request.
+Use the `audit_id` from the previous step to fetch the full report.
 
 **Example Request:**
 
 ```bash
-curl -X GET "http://127.0.0.1:8000/v1/audits/119"
+curl -X GET "http://127.0.0.1:8001/v1/audits/138" \
+-H "X-API-KEY: your_secret_api_key_here"
 ```
 
 **Example Response (`200 OK`):**
 
-The response will contain the full, detailed report with our new categorized link analysis.
+The response will contain the full, detailed report.
 
 ```json
 {
-    "id": 119,
+    "audit_id": 138,
     "status": "COMPLETE",
-    "url": "https://textennis.com/privacy-policy/",
-    "created_at": "2025-06-18T17:30:38.196042",
-    "completed_at": "2025-06-18T17:31:30.018334",
+    "url": "http://textennis.com/",
+    "user_id": "user-123",
+    "user_audit_report_request_id": "request-abc-789",
+    "created_at": "2025-06-21T23:07:07.922573",
+    "completed_at": "2025-06-21T23:07:43.734928",
     "report_json": {
         "status": "COMPLETE",
-        "audit_id": 119,
+        "audit_id": 138,
         "summary": {
             "total_pages_analyzed": 20,
             "internal_broken_links_found": 0,
