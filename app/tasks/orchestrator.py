@@ -213,15 +213,38 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
         _mark_audit_failed(audit_id, error_msg)
         raise
 
-    broken_links_df = crawl_df[crawl_df['status'] >= 400].copy()
+    # Handle broken links safely - check if 'status' column exists
     broken_links_report = []
-    referer_col = 'request_headers_Referer'
-    if referer_col in broken_links_df.columns:
-        broken_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
-        broken_links_df['source_url'] = broken_links_df['source_url'].where(pd.notna(broken_links_df['source_url']), None)
-        broken_links_report = broken_links_df[['url', 'status', 'source_url']].to_dict('records')
-    else:
-        broken_links_report = broken_links_df[['url', 'status']].to_dict('records')
+    try:
+        if 'status' in crawl_df.columns:
+            broken_links_df = crawl_df[crawl_df['status'] >= 400].copy()
+            referer_col = 'request_headers_Referer'
+            if referer_col in broken_links_df.columns:
+                broken_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
+                broken_links_df['source_url'] = broken_links_df['source_url'].where(pd.notna(broken_links_df['source_url']), None)
+                broken_links_report = broken_links_df[['url', 'status', 'source_url']].to_dict('records')
+            else:
+                broken_links_report = broken_links_df[['url', 'status']].to_dict('records')
+        else:
+            # Handle timeout/error cases where no status column exists
+            logger.warning(f"No 'status' column found in crawl data for audit_id {audit_id}. Checking for error records.")
+            # Look for timeout/error indicators in the data
+            error_rows = []
+            for _, row in crawl_df.iterrows():
+                url = row.get('url', 'Unknown URL')
+                # Check for common error indicators
+                if pd.isna(row.get('title')) and pd.isna(row.get('meta_desc')) and pd.isna(row.get('h1')):
+                    # This suggests a failed request (timeout, connection error, etc.)
+                    error_rows.append({
+                        'url': url,
+                        'status': 'Timeout/Error'  # Generic error status for display
+                    })
+            broken_links_report = error_rows
+            if error_rows:
+                logger.info(f"Found {len(error_rows)} error records (likely timeouts) for audit_id {audit_id}")
+    except Exception as e:
+        logger.error(f"Failed to process broken links for audit_id {audit_id}: {e}")
+        broken_links_report = []
 
     links_to_check = []
     try:
