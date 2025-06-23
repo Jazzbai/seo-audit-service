@@ -492,6 +492,23 @@ alembic revision --autogenerate -m "sync schema"
 alembic upgrade head
 ```
 
+**D. Multiple migration files with table drop issues:**
+
+If you encounter "table does not exist" errors during migration, multiple migration files may be trying to drop the same tables. This commonly happens with auto-generated migrations that include cleanup operations.
+
+*Solution: Make table drops conditional in migration files*
+```python
+# In the migration file's upgrade() function
+def upgrade() -> None:
+    # Drop tables only if they exist (for fresh installs)
+    connection = op.get_bind()
+    inspector = sa.inspect(connection)
+    existing_tables = inspector.get_table_names()
+    
+    if 'table_name' in existing_tables:
+        op.drop_table('table_name')
+```
+
 #### 6. Port Conflicts
 
 **Problem:** Port 8001 (or your API_PORT) is already in use
