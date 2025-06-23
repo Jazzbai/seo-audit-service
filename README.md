@@ -187,8 +187,8 @@ This approach is for developers who want to run the Python services directly on 
 
     - **Terminal 2: Run Celery Worker**
       ```bash
-      # Use the thread pool for better performance on Windows for I/O tasks
-      celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info
+      # Use unique hostname to avoid conflicts with other Celery workers
+      celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info --hostname=seo-audit@%h
       ```
 
 ## Using the API
@@ -573,6 +573,48 @@ source venv/bin/activate  # Linux/macOS
 
 pip install -r requirements.txt
 ```
+
+#### 8. Celery Worker Conflicts (Multiple Workers on Same Server)
+
+**Problem:** Warning message when starting Celery worker: "A node named celery@hostname is already using this process mailbox!"
+
+**Cause:** Multiple Celery applications running on the same server with conflicting worker names.
+
+**Symptoms:**
+```
+[WARNING/MainProcess] A node named celery@EIT-SMS-Api is already using this process mailbox!
+Maybe you forgot to shutdown the other node or did not do so properly?
+```
+
+**Solutions:**
+
+**A. Use Unique Hostname (Recommended):**
+```bash
+# Instead of default hostname, use a unique identifier
+celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info --hostname=seo-audit@%h
+```
+
+**B. Verify Worker Isolation:**
+After starting with unique hostname, you should see:
+```
+-------------- seo-audit@hostname v5.5.3 (immunity)
+[queues]
+.> seo_audit_queue  exchange=seo_audit_queue(direct) key=seo_audit_queue
+[INFO/MainProcess] mingle: sync with 1 nodes
+[INFO/MainProcess] seo-audit@hostname ready.
+```
+
+**C. Production Deployment:**
+For production environments with multiple Celery applications, always use:
+- **Unique worker hostnames** (`--hostname=app-name@%h`)
+- **Dedicated queues** (configured via `CELERY_QUEUE_NAME`)
+- **Separate working directories** for each application
+
+**Why This Matters:**
+- Prevents task routing conflicts between different applications
+- Avoids process mailbox collisions
+- Ensures proper worker coordination and monitoring
+- Enables clean worker management and scaling
 
 ### Getting Help
 
