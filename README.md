@@ -143,11 +143,30 @@ This approach is for developers who want to run the Python services directly on 
     pip install -r requirements.txt
     ```
 
-5.  **Configure the `.env` File**
+5.  **Configure the `.env` File for Manual Deployment**
 
-    Create the `.env` file if you haven't already (`cp .env.example .env`). **Crucially, you must edit it** to point to your local services.
-    - Change `postgres-db` and `rabbitmq` to `localhost`.
-    - Set your `API_KEY` and desired `API_PORT`.
+    Create the `.env` file if you haven't already (`cp .env.example .env`). **For manual deployment, you must update service hostnames** from Docker container names to localhost.
+
+    **Critical Changes Required:**
+    ```env
+    # Change from Docker service names to localhost
+    DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/database_name
+    BROKER_URL=amqp://guest:guest@localhost:5672//
+    RESULT_BACKEND=db+postgresql+psycopg://user:password@localhost:5432/database_name
+    
+    # Set your API configuration
+    API_KEY=your-secret-api-key-here
+    API_PORT=8001
+    ```
+
+    **Why This is Required:**
+    - **Docker Compose**: Uses service names (`postgres-db`, `rabbitmq`) for internal networking
+    - **Manual Deployment**: Services run on localhost with standard ports
+    - **Common Mistake**: Forgetting to change service names causes connection failures
+
+    **Service Name Mapping:**
+    - `postgres-db` → `localhost:5432`
+    - `rabbitmq` → `localhost:5672`
 
 6.  **Run Database Migrations**
 
