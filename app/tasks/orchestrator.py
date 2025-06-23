@@ -12,6 +12,12 @@ from collections import Counter
 from urllib.parse import urlparse
 import httpx
 from app.core.config import settings
+from app.utils.error_handler import (
+    classify_error, 
+    is_valid_url, 
+    check_domain_exists, 
+    validate_crawl_output
+)
 
 # --- Learning Notes: Stop Words ---
 STOP_WORDS = {
@@ -44,13 +50,63 @@ def _get_top_words(series: pd.Series, n: int = 10) -> list:
     word_counts = Counter(w for w in words if w not in STOP_WORDS)
     return word_counts.most_common(n)
 
+def _mark_audit_failed(audit_id: int, error_message: str, url: str = None):
+    """Mark audit as failed with proper error classification."""
+    error_info = classify_error(error_message, url)
+    
+    db = SessionLocal()
+    try:
+        audit = db.query(Audit).filter(Audit.id == audit_id).first()
+        if audit:
+            # Only update if not already in a final state to prevent duplicates
+            if audit.status not in ["FAILED", "COMPLETE"]:
+                audit.status = error_info["status"]
+                audit.error_message = error_info["user_message"]
+                audit.technical_error = error_info["technical_message"]
+                audit.report_json = {}
+                audit.completed_at = datetime.datetime.utcnow()
+                db.commit()
+                logger.info(f"Marked audit {audit_id} as {error_info['status']}: {error_info['user_message']}")
+                
+                # Send webhook for failed audits too (only once)
+                if settings.DASHBOARD_CALLBACK_URL:
+                    logger.info(f"Dashboard callback URL is set, queueing callback task for failed audit_id: {audit_id}")
+                    send_report_to_dashboard.delay(audit_id=audit_id)
+                else:
+                    logger.info(f"No dashboard callback URL configured. Skipping callback for failed audit_id: {audit_id}")
+            else:
+                logger.info(f"Audit {audit_id} already in final state {audit.status}, skipping duplicate update")
+                
+    except Exception as db_error:
+        logger.error(f"Failed to update audit {audit_id} status: {db_error}")
+    finally:
+        db.close()
+
 @celery_app.task(bind=True)
 def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
     logger.info(f"Starting advertools crawl for audit_id: {audit_id}, url: {url}")
+    
+    # Pre-flight URL validation
+    url_valid, url_error = is_valid_url(url)
+    if not url_valid:
+        error_msg = f"Invalid URL format: {url_error}"
+        logger.error(f"URL validation failed for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg, url)
+        raise ValueError(error_msg)
+    
+    # Check if domain exists
+    domain_exists, domain_error = check_domain_exists(url)
+    if not domain_exists:
+        error_msg = f"Domain validation failed: {domain_error}"
+        logger.error(f"Domain check failed for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg, url)
+        raise ValueError(error_msg)
+    
     os.makedirs('results', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     output_file = f"results/audit_results_{audit_id}.jl"
     log_file = f"logs/audit_log_{audit_id}.log"
+    
     custom_settings = {
         'DOWNLOAD_DELAY': 1,
         'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
@@ -58,63 +114,104 @@ def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
         'CLOSESPIDER_PAGECOUNT': max_pages,
         'USER_AGENT': 'Python-SEOAuditAgent/1.0 (+https://github.com/user/repo)',
         'LOG_FILE': log_file,
+        'DOWNLOAD_TIMEOUT': 30,
+        'DNS_TIMEOUT': 10,
     }
+    
     try:
         adv.crawl(url_list=url, output_file=output_file, follow_links=True, custom_settings=custom_settings)
+        
+        # Validate crawl output
+        output_valid, output_error = validate_crawl_output(output_file)
+        if not output_valid:
+            error_msg = f"Crawl validation failed: {output_error}"
+            logger.error(f"Crawl output validation failed for audit_id {audit_id}: {error_msg}")
+            _mark_audit_failed(audit_id, error_msg, url)
+            raise ValueError(error_msg)
+        
         logger.info(f"Crawl finished for audit_id: {audit_id}. Results in: {output_file}")
         return output_file
+        
     except Exception as e:
-        logger.error(f"Advertools crawl failed for audit_id: {audit_id} with error: {e}", exc_info=True)
-        db = SessionLocal()
-        try:
-            audit = db.query(Audit).filter(Audit.id == audit_id).first()
-            if audit:
-                audit.status = "ERROR"
-                audit.report_json = {"status": "ERROR", "message": f"Crawling failed: {e!r}"}
-                audit.completed_at = datetime.datetime.utcnow()
-                db.commit()
-        finally:
-            db.close()
+        error_msg = str(e)
+        logger.error(f"Advertools crawl failed for audit_id: {audit_id} with error: {error_msg}", exc_info=True)
+        _mark_audit_failed(audit_id, error_msg, url)
         raise
 
 @celery_app.task(bind=True)
 def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> dict:
     logger.info(f"Compiling report for audit_id: {audit_id} from file: {crawl_output_file}")
+    
     try:
+        # Validate crawl output first
+        output_valid, output_error = validate_crawl_output(crawl_output_file)
+        if not output_valid:
+            error_msg = f"Invalid crawl output: {output_error}"
+            logger.error(f"Crawl output validation failed for audit_id {audit_id}: {error_msg}")
+            _mark_audit_failed(audit_id, error_msg)
+            raise ValueError(error_msg)
+        
         crawl_df = pd.read_json(crawl_output_file, lines=True)
+        
+        # Additional validation for required columns
+        if crawl_df.empty:
+            error_msg = "Crawl produced no analyzable data"
+            logger.error(f"Empty crawl results for audit_id {audit_id}")
+            _mark_audit_failed(audit_id, error_msg)
+            raise ValueError(error_msg)
+            
     except FileNotFoundError:
-        logger.error(f"Crawl output file not found: {crawl_output_file} for audit_id: {audit_id}")
-        return {"status": "ERROR", "message": "Crawl output file not found."}
+        error_msg = f"Crawl output file not found: {crawl_output_file}"
+        logger.error(f"File not found for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg)
+        raise
+    except Exception as e:
+        error_msg = f"Failed to read crawl output: {str(e)}"
+        logger.error(f"Error reading crawl file for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg)
+        raise
 
-    page_level_report = {}
-    pages_with_title, pages_with_meta_desc, pages_with_one_h1, pages_with_multiple_h1s, pages_with_no_h1 = 0, 0, 0, 0, 0
-    for _, row in crawl_df.iterrows():
-        url = row.get('url')
-        if not url: continue
-        page_report = []
-        title = row.get('title')
-        if pd.notna(title) and title:
-            pages_with_title += 1
-            page_report.append({"status": "SUCCESS", "check": "title", "value": title.strip(), "message": "Title found."})
-        else:
-            page_report.append({"status": "FAILURE", "check": "title", "value": None, "message": "Title tag not found or is empty."})
-        meta_desc = row.get('meta_desc')
-        if pd.notna(meta_desc) and meta_desc:
-            pages_with_meta_desc += 1
-            page_report.append({"status": "SUCCESS", "check": "meta_description", "value": meta_desc.strip(), "message": "Meta description found."})
-        else:
-            page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
-        h1s = [h.strip() for h in row.get('h1', '').split('@@') if h.strip()] if pd.notna(row.get('h1')) else []
-        if len(h1s) == 1:
-            pages_with_one_h1 += 1
-            page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1s[0]})
-        elif len(h1s) == 0:
-            pages_with_no_h1 += 1
-            page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
-        else:
-            pages_with_multiple_h1s += 1
-            page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1s)} H1 tags. Expected 1.", "count": len(h1s), "value": h1s})
-        page_level_report[url] = page_report
+    try:
+        page_level_report = {}
+        pages_with_title, pages_with_meta_desc, pages_with_one_h1, pages_with_multiple_h1s, pages_with_no_h1 = 0, 0, 0, 0, 0
+        for _, row in crawl_df.iterrows():
+            url = row.get('url')
+            if not url: continue
+            page_report = []
+            
+            # Handle title safely
+            title = row.get('title')
+            if pd.notna(title) and title:
+                pages_with_title += 1
+                page_report.append({"status": "SUCCESS", "check": "title", "value": title.strip(), "message": "Title found."})
+            else:
+                page_report.append({"status": "FAILURE", "check": "title", "value": None, "message": "Title tag not found or is empty."})
+            
+            # Handle meta description safely
+            meta_desc = row.get('meta_desc')
+            if pd.notna(meta_desc) and meta_desc:
+                pages_with_meta_desc += 1
+                page_report.append({"status": "SUCCESS", "check": "meta_description", "value": meta_desc.strip(), "message": "Meta description found."})
+            else:
+                page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
+            
+            # Handle H1 safely
+            h1s = [h.strip() for h in row.get('h1', '').split('@@') if h.strip()] if pd.notna(row.get('h1')) else []
+            if len(h1s) == 1:
+                pages_with_one_h1 += 1
+                page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1s[0]})
+            elif len(h1s) == 0:
+                pages_with_no_h1 += 1
+                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
+            else:
+                pages_with_multiple_h1s += 1
+                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1s)} H1 tags. Expected 1.", "count": len(h1s), "value": h1s})
+            page_level_report[url] = page_report
+    except Exception as e:
+        error_msg = f"Failed to process page-level data: {str(e)}"
+        logger.error(f"Page processing error for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg)
+        raise
 
     broken_links_df = crawl_df[crawl_df['status'] >= 400].copy()
     broken_links_report = []
@@ -130,11 +227,16 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
     try:
         main_domain = urlparse(crawl_df['url'][0]).netloc
         link_df = adv.crawlytics.links(crawl_df, internal_url_regex=main_domain)
-        external_links_df = link_df[~link_df['internal']].copy()
-        external_links_df.dropna(subset=['link'], inplace=True)
-        external_links_df['link'] = external_links_df['link'].astype(str)
-        links_to_check = external_links_df.rename(columns={'url': 'source_url'})[['link', 'source_url']].to_dict('records')
-        logger.info(f"Found {len(external_links_df['link'].unique())} unique external links to check for audit_id: {audit_id}")
+        
+        # Check if 'internal' column exists
+        if 'internal' in link_df.columns:
+            external_links_df = link_df[~link_df['internal']].copy()
+            external_links_df.dropna(subset=['link'], inplace=True)
+            external_links_df['link'] = external_links_df['link'].astype(str)
+            links_to_check = external_links_df.rename(columns={'url': 'source_url'})[['link', 'source_url']].to_dict('records')
+            logger.info(f"Found {len(external_links_df['link'].unique())} unique external links to check for audit_id: {audit_id}")
+        else:
+            logger.warning(f"No 'internal' column found in links data for audit_id {audit_id}. Skipping external link analysis.")
     except Exception as e:
         logger.error(f"Failed to extract external links for audit_id {audit_id}: {e}", exc_info=True)
 
@@ -150,23 +252,29 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
             "pages_with_correct_h1": pages_with_one_h1,
             "pages_with_multiple_h1s": pages_with_multiple_h1s,
             "pages_with_no_h1": pages_with_no_h1,
-            "top_10_title_words": _get_top_words(crawl_df['title']),
-            "top_10_h1_words": _get_top_words(crawl_df['h1']),
+            "top_10_title_words": _get_top_words(crawl_df['title']) if 'title' in crawl_df.columns else [],
+            "top_10_h1_words": _get_top_words(crawl_df['h1']) if 'h1' in crawl_df.columns else [],
         },
         "internal_broken_links": broken_links_report,
         "page_level_report": page_level_report
     }
 
-    db = SessionLocal()
     try:
-        audit = db.query(Audit).filter(Audit.id == audit_id).first()
-        if audit:
-            audit.status = "ANALYZING_EXTERNAL"
-            audit.report_json = initial_report
-            db.commit()
-    finally:
-        db.close()
-    return {"crawl_output_file": crawl_output_file, "links_to_check": links_to_check}
+        db = SessionLocal()
+        try:
+            audit = db.query(Audit).filter(Audit.id == audit_id).first()
+            if audit:
+                audit.status = "ANALYZING_EXTERNAL"
+                audit.report_json = initial_report
+                db.commit()
+        finally:
+            db.close()
+        return {"crawl_output_file": crawl_output_file, "links_to_check": links_to_check}
+    except Exception as e:
+        error_msg = f"Failed to save report compilation: {str(e)}"
+        logger.error(f"Database error for audit_id {audit_id}: {error_msg}")
+        _mark_audit_failed(audit_id, error_msg)
+        raise
 
 @celery_app.task(bind=True)
 def check_external_links(self, previous_task_output: dict, audit_id: int) -> dict:
@@ -298,14 +406,17 @@ def send_report_to_dashboard(self, audit_id: int):
         
         # The data in audit.report_json is now clean. We construct the payload
         # using the direct attributes from the model for clarity and consistency.
+        # Order matches the API response exactly for consistency
         callback_payload = {
+            "audit_id": audit.id,
+            "status": audit.status,
+            "url": audit.url,
             "user_id": audit.user_id,
             "user_audit_report_request_id": audit.user_audit_report_request_id,
-            "status": audit.status,
-            "audit_id": audit.id,
-            "url": audit.url,
             "created_at": audit.created_at.isoformat(),
             "completed_at": audit.completed_at.isoformat() if audit.completed_at else None,
+            "error_message": audit.error_message,
+            "technical_error": audit.technical_error,
             "report_json": audit.report_json
         }
 

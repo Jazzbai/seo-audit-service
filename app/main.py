@@ -12,6 +12,7 @@ from app.tasks.orchestrator import run_full_audit
 from app.db.session import get_db, Base, engine
 from app.models.audit import Audit
 from app.api.dependencies import get_api_key
+from app.core.config import settings
 
 # Load environment variables from .env file
 load_dotenv()
@@ -44,7 +45,9 @@ class AuditResultResponse(BaseModel):
     user_audit_report_request_id: Optional[str] = None
     created_at: datetime.datetime
     completed_at: Optional[datetime.datetime]
-    report: Optional[Any] = Field(None, alias="report_json")
+    error_message: Optional[str] = None
+    technical_error: Optional[str] = None
+    report_json: Optional[Any] = None
 
     class Config:
         from_attributes = True
@@ -117,4 +120,4 @@ async def get_audit_result(
     # By using a response_model with from_attributes=True, we can return
     # the SQLAlchemy model directly. Pydantic will handle mapping the
     # `audit_record.report_json` to the `report` field in the response model.
-    return audit_record 
+    return audit_record
