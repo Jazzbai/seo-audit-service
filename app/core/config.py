@@ -24,10 +24,22 @@ class Settings(BaseSettings):
     DASHBOARD_CALLBACK_URL: Optional[str] = Field(None, alias='DASHBOARD_CALLBACK_URL')
     DASHBOARD_API_KEY: Optional[str] = Field(None, alias='DASHBOARD_API_KEY')
 
+    # Celery Queue Configuration (prevents interference with other workers)
+    CELERY_QUEUE_NAME: str = Field("seo_audit_queue", alias='CELERY_QUEUE_NAME')
+
     # Lowercase Celery settings for modern configuration
     task_serializer: str = 'json'
     result_serializer: str = 'json'
     accept_content: list[str] = ['json']
+    
+    # Queue configuration - use our dedicated queue
+    task_default_queue: str = "seo_audit_queue"
+    
+    # Task routing - ensures all our tasks go to our queue
+    task_routes: dict = {
+        'app.tasks.orchestrator.*': {'queue': 'seo_audit_queue'},
+        'app.celery_app.*': {'queue': 'seo_audit_queue'}
+    }
 
     class Config:
         # This tells Pydantic to look for a .env file if the environment variables are not set.

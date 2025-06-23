@@ -15,6 +15,12 @@ celery_app = Celery(
 # Load configuration directly from our Pydantic settings object.
 celery_app.conf.update(settings.model_dump())
 
+# Explicitly configure queue routing to prevent interference
+celery_app.conf.update(
+    task_default_queue=settings.CELERY_QUEUE_NAME,
+    task_routes=settings.task_routes,
+)
+
 @celery_app.task(bind=True)
 def debug_task(self):
     print(f'Request: {self.request!r}') 
