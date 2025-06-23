@@ -297,3 +297,258 @@ The project includes a utility script, `view_result.py`, to fetch the raw result
   ```bash
   docker-compose exec fastapi-app python view_result.py <celery_task_id>
   ``` 
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. Database Connection Issues
+
+**Problem:** `getaddrinfo failed` or connection errors during `alembic upgrade head`
+
+**Causes & Solutions:**
+
+**A. URL Encoding Issues with Special Characters in Passwords**
+
+If your PostgreSQL password contains special characters like `@`, `!`, `#`, `%`, these must be URL-encoded in the `DATABASE_URL`.
+
+**Example Problem:**
+```env
+# This will fail if password contains @ or !
+DATABASE_URL=postgresql+psycopg://user:MyP@ssw0rd!@localhost:5432/mydb
+```
+
+**Solutions:**
+
+*Option 1: URL-encode the password*
+```env
+# @ becomes %40, ! becomes %21
+DATABASE_URL=postgresql+psycopg://user:MyP%40ssw0rd%21@localhost:5432/mydb
+```
+
+*Option 2: Change password to avoid special characters (Recommended)*
+```bash
+# Connect to PostgreSQL
+psql -U postgres -h localhost
+
+# Change to a URL-safe password
+ALTER USER seo_audit_user WITH PASSWORD 'MyPasswordStrong123';
+```
+
+**B. Service Not Running**
+
+Verify PostgreSQL is running:
+```bash
+# Windows
+Get-Service -Name postgresql*
+netstat -an | findstr :5432
+
+# Linux/macOS
+sudo systemctl status postgresql
+netstat -an | grep :5432
+```
+
+#### 2. Database Permission Issues
+
+**Problem:** `permission denied for schema public` during migrations
+
+**Cause:** The database user lacks necessary permissions to create tables and sequences. This is especially common with **PostgreSQL 15+** due to enhanced security defaults.
+
+**Solution:**
+
+1. Connect as PostgreSQL superuser:
+   ```bash
+   psql -U postgres -h localhost -d your_database_name
+   ```
+
+2. **For PostgreSQL 15+ (Enhanced Security):**
+   
+   First, verify you're connected to the correct database and check current permissions:
+   ```sql
+   -- Verify database and check current permissions
+   SELECT current_database();
+   \dn+
+   
+   -- Check if user exists
+   \du
+   ```
+
+3. Grant comprehensive permissions:
+   ```sql
+   -- Grant schema usage and creation permissions
+   GRANT USAGE ON SCHEMA public TO your_user;
+   GRANT CREATE ON SCHEMA public TO your_user;
+   
+   -- Grant permissions on existing tables and sequences
+   GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO your_user;
+   GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO your_user;
+   
+   -- Grant permissions on future tables and sequences (important!)
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO your_user;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO your_user;
+   
+   -- Verify permissions were applied (should show UC permissions)
+   \dn+
+   
+   -- Exit
+   \q
+   ```
+
+4. **Alternative for PostgreSQL 15+ (if above doesn't work):**
+   ```sql
+   -- Make the user the database owner (gives full permissions)
+   ALTER DATABASE your_database_name OWNER TO your_user;
+   ```
+
+5. Test and retry the migration:
+   ```bash
+   # Test if user can create tables
+   psql -U your_user -h localhost -d your_database_name -c "CREATE TABLE test_permissions (id INT); DROP TABLE test_permissions;"
+   
+   # If successful, run migration
+   alembic upgrade head
+   ```
+
+**PostgreSQL Version Notes:**
+- **PostgreSQL 14 and earlier:** Users could CREATE in public schema by default
+- **PostgreSQL 15+:** Explicit permissions required for enhanced security
+- **Migration Impact:** Existing applications need permission updates when upgrading PostgreSQL
+
+#### 3. Windows Server Deployment Issues
+
+**Problem:** Various encoding or path issues on Windows Server 2019/2022
+
+**Common Issues & Solutions:**
+
+**A. PowerShell Execution Policy**
+```powershell
+# If you can't activate virtual environment
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**B. Python Path Issues**
+```powershell
+# Use the Python Launcher for Windows
+py -3.12 -m venv venv
+py -3.12 -m pip install -r requirements.txt
+```
+
+**C. Console Code Page Warnings**
+The warning `Console code page (437) differs from Windows code page (1252)` is cosmetic and won't affect functionality. To suppress:
+```powershell
+# Set console to UTF-8 (optional)
+chcp 65001
+```
+
+#### 4. RabbitMQ Connection Issues
+
+**Problem:** Celery can't connect to RabbitMQ
+
+**Solutions:**
+
+**A. Verify RabbitMQ is running:**
+```bash
+# Windows
+Get-Service -Name RabbitMQ
+netstat -an | findstr :5672
+
+# Check RabbitMQ management interface (if enabled)
+# http://localhost:15672 (guest/guest)
+```
+
+**B. Check firewall settings:**
+```powershell
+# Windows - ensure port 5672 is open
+New-NetFirewallRule -DisplayName "RabbitMQ" -Direction Inbound -Port 5672 -Protocol TCP -Action Allow
+```
+
+#### 5. Migration History Issues
+
+**Problem:** `alembic_version` table conflicts or "revision not found" errors
+
+**Solutions:**
+
+**A. Check current revision:**
+```bash
+alembic current
+alembic history
+```
+
+**B. Reset migration history (if safe):**
+```sql
+-- Connect to database
+psql -U your_user -d your_database
+
+-- Check current version
+SELECT * FROM alembic_version;
+
+-- If needed, update to match your latest migration
+UPDATE alembic_version SET version_num = 'your_latest_revision_id';
+```
+
+**C. Generate new migration if schema differs:**
+```bash
+alembic revision --autogenerate -m "sync schema"
+alembic upgrade head
+```
+
+#### 6. Port Conflicts
+
+**Problem:** Port 8001 (or your API_PORT) is already in use
+
+**Solution:**
+
+**A. Find what's using the port:**
+```bash
+# Windows
+netstat -ano | findstr :8001
+
+# Kill the process (replace PID)
+taskkill /PID <process_id> /F
+```
+
+**B. Change the port in `.env`:**
+```env
+API_PORT=8002
+```
+
+#### 7. Virtual Environment Issues
+
+**Problem:** Module import errors or package conflicts
+
+**Solutions:**
+
+**A. Recreate virtual environment:**
+```bash
+# Deactivate current environment
+deactivate
+
+# Remove old environment
+rm -rf venv  # Linux/macOS
+Remove-Item -Recurse -Force venv  # Windows
+
+# Create new environment
+python3.12 -m venv venv  # Linux/macOS
+py -3.12 -m venv venv     # Windows
+
+# Activate and reinstall
+source venv/bin/activate  # Linux/macOS
+.\venv\Scripts\Activate.ps1  # Windows
+
+pip install -r requirements.txt
+```
+
+### Getting Help
+
+If you encounter issues not covered here:
+
+1. **Check the logs:** Look at Celery worker logs and FastAPI application logs
+2. **Verify environment variables:** Ensure all required variables in `.env` are set correctly
+3. **Test database connection:** Use `psql` to verify you can connect with the credentials in your `.env`
+4. **Check service status:** Ensure PostgreSQL and RabbitMQ are running and accessible
+
+For production deployments, consider using:
+- **Docker Compose** for consistent environments
+- **Environment-specific `.env` files** for different deployment stages
+- **Database connection pooling** for better performance
+- **Process managers** like systemd or PM2 for service management 
