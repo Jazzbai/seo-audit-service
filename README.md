@@ -181,8 +181,8 @@ This approach is for developers who want to run the Python services directly on 
 
     - **Terminal 1: Run FastAPI Server**
       ```bash
-      # The port will be controlled by the API_PORT in your .env file
-      uvicorn app.main:app --reload --port 8001
+      # Port is set directly in the command (not controlled by .env file)
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
       ```
 
     - **Terminal 2: Run Celery Worker**

@@ -112,7 +112,7 @@ def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
         'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
         'ROBOTSTXT_OBEY': False,
         'CLOSESPIDER_PAGECOUNT': max_pages,
-        'USER_AGENT': 'Python-SEOAuditAgent/1.0 (+https://github.com/user/repo)',
+        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'LOG_FILE': log_file,
         'DOWNLOAD_TIMEOUT': 30,
         'DNS_TIMEOUT': 10,
@@ -314,7 +314,7 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
     headers_output_file = f"results/headers_results_{audit_id}.jl"
     custom_settings = {
         'ROBOTSTXT_OBEY': False,
-        'USER_AGENT': 'Python-SEOAuditAgent/1.0 (External Link Checker)',
+        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         'DOWNLOAD_TIMEOUT': 15,
         'DNS_TIMEOUT': 10,
     }
