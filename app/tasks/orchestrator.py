@@ -8,7 +8,7 @@ import pandas as pd
 import os
 import logging
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from urllib.parse import urlparse
 import httpx
 from app.core.config import settings
@@ -18,6 +18,9 @@ from app.utils.error_handler import (
     check_domain_exists, 
     validate_crawl_output
 )
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
 # --- Learning Notes: Stop Words ---
 STOP_WORDS = {
@@ -301,48 +304,58 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
 
 @celery_app.task(bind=True)
 def check_external_links(self, previous_task_output: dict, audit_id: int) -> dict:
+    """
+    Check external links using async chunked processing.
+    This version prevents blocking and handles domain collisions intelligently.
+    """
     links_to_check = previous_task_output.get('links_to_check', [])
     crawl_output_file = previous_task_output.get('crawl_output_file')
+    
     if not links_to_check:
         logger.info(f"No external links to check for audit_id: {audit_id}. Skipping.")
         return {"crawl_output_file": crawl_output_file, "external_links_report": {}}
 
+    # Create URL to source mapping for preserving source URLs
     links_df = pd.DataFrame(links_to_check)
-    unique_urls_to_check = links_df['link'].unique().tolist()
-    logger.info(f"Checking {len(unique_urls_to_check)} unique external links for audit_id: {audit_id}")
-    os.makedirs('results', exist_ok=True)
-    headers_output_file = f"results/headers_results_{audit_id}.jl"
-    custom_settings = {
-        'ROBOTSTXT_OBEY': False,
-        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'DOWNLOAD_TIMEOUT': 15,
-        'DNS_TIMEOUT': 10,
-    }
-    external_links_report = {"unreachable_links": [], "broken_links": [], "permission_issues": [], "method_issues": [], "other_client_errors": []}
+    url_to_source_mapping = {}
+    
+    for _, row in links_df.iterrows():
+        url = row['link']
+        source = row['source_url']
+        if url not in url_to_source_mapping:
+            url_to_source_mapping[url] = source
+        # If URL appears multiple times, keep the first source for simplicity
+    
+    unique_urls_to_check = list(url_to_source_mapping.keys())
+    
+    logger.info(f"Starting async external link checking for {len(unique_urls_to_check)} unique URLs (audit_id: {audit_id})")
+    
     try:
-        adv.crawl_headers(unique_urls_to_check, headers_output_file, custom_settings=custom_settings)
-        headers_df = pd.read_json(headers_output_file, lines=True)
-        if 'status' in headers_df.columns:
-            headers_df['status'] = headers_df['status'].fillna(-1)
-            headers_df['status'] = headers_df['status'].astype(int)
-        else:
-            headers_df['status'] = -1
-        error_headers_df = headers_df[~headers_df['status'].between(200, 399)].copy()
-        report_df = pd.merge(links_df, error_headers_df[['url', 'status']], left_on='link', right_on='url', how='inner').rename(columns={'link': 'url_to'})
-        for _, row in report_df.iterrows():
-            status = row['status']
-            link_info = {'url': row['url_to'], 'status': 'Unreachable' if status == -1 else status, 'source_url': row['source_url']}
-            if status == -1: external_links_report["unreachable_links"].append(link_info)
-            elif status in [404, 410]: external_links_report["broken_links"].append(link_info)
-            elif status == 403: external_links_report["permission_issues"].append(link_info)
-            elif status == 405: external_links_report["method_issues"].append(link_info)
-            elif 400 <= status < 500: external_links_report["other_client_errors"].append(link_info)
+        # Run the async function in the current thread
+        # Since this is a Celery task, we need to create a new event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            external_links_report = loop.run_until_complete(
+                check_external_links_async(unique_urls_to_check, audit_id, url_to_source_mapping)
+            )
+        finally:
+            loop.close()
+        
+        logger.info(f"Async external link checking completed for audit_id: {audit_id}")
+        
     except Exception as e:
         logger.error(f"Failed to check external links for audit_id {audit_id}: {e}", exc_info=True)
-    finally:
-        if os.path.exists(headers_output_file):
-            try: os.remove(headers_output_file)
-            except OSError as e: logger.warning(f"Error cleaning up headers file {headers_output_file}: {e}")
+        external_links_report = {
+            "unreachable_links": [],
+            "broken_links": [],
+            "permission_issues": [],
+            "method_issues": [],
+            "other_client_errors": [],
+            "error": str(e)
+        }
+    
     return {"crawl_output_file": crawl_output_file, "external_links_report": external_links_report}
 
 @celery_app.task(bind=True)
@@ -484,3 +497,273 @@ def run_full_audit(audit_id: int, url: str, max_pages: int = 100):
 @celery_app.task
 def debug_task():
     print("Debug task executed.")
+
+# --- Async External Link Checking Functions ---
+
+def chunk_urls_by_domain(urls: list, max_chunk_size: int = 20) -> list:
+    """
+    Intelligently chunk URLs to prevent domain collision.
+    Groups URLs by domain and distributes them across chunks.
+    """
+    domain_groups = defaultdict(list)
+    
+    # Group URLs by domain
+    for url in urls:
+        try:
+            domain = urlparse(url).netloc
+            domain_groups[domain].append(url)
+        except Exception:
+            # Handle malformed URLs
+            domain_groups['unknown'].append(url)
+    
+    chunks = []
+    
+    # For each domain, distribute URLs across different chunks
+    for domain, domain_urls in domain_groups.items():
+        for i, url in enumerate(domain_urls):
+            chunk_index = i % max_chunk_size
+            
+            # Ensure we have enough chunks
+            while len(chunks) <= chunk_index:
+                chunks.append([])
+            
+            chunks[chunk_index].append(url)
+    
+    # Remove empty chunks and limit chunk sizes
+    final_chunks = []
+    for chunk in chunks:
+        if chunk:
+            # Split large chunks further
+            while len(chunk) > max_chunk_size:
+                final_chunks.append(chunk[:max_chunk_size])
+                chunk = chunk[max_chunk_size:]
+            if chunk:
+                final_chunks.append(chunk)
+    
+    return final_chunks
+
+def get_domain_safe_settings(urls: list) -> dict:
+    """
+    Get advertools settings optimized for the domains in the URL list.
+    More conservative for single domain, more aggressive for multiple domains.
+    """
+    domains = set()
+    for url in urls:
+        try:
+            domains.add(urlparse(url).netloc)
+        except Exception:
+            continue
+    
+    if len(domains) <= 1:
+        # Single domain - be conservative to avoid getting blocked
+        return {
+            'ROBOTSTXT_OBEY': False,
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'DOWNLOAD_DELAY': 2,
+            'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
+            'RANDOMIZE_DOWNLOAD_DELAY': True,
+            'DOWNLOAD_TIMEOUT': 15,
+            'DNS_TIMEOUT': 10,
+            'RETRY_ENABLED': False,
+        }
+    else:
+        # Multiple domains - can be more aggressive
+        return {
+            'ROBOTSTXT_OBEY': False,
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'DOWNLOAD_DELAY': 1,
+            'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+            'RANDOMIZE_DOWNLOAD_DELAY': True,
+            'DOWNLOAD_TIMEOUT': 10,
+            'DNS_TIMEOUT': 5,
+            'RETRY_ENABLED': False,
+        }
+
+def run_advertools_chunk(urls: list, output_file: str) -> dict:
+    """
+    Run advertools crawl_headers on a chunk of URLs.
+    This function runs in a separate thread.
+    """
+    try:
+        if not urls:
+            return {"success": True, "urls_processed": 0, "output_file": output_file}
+        
+        # Get domain-optimized settings
+        custom_settings = get_domain_safe_settings(urls)
+        
+        # Run advertools crawl_headers
+        adv.crawl_headers(urls, output_file, custom_settings=custom_settings)
+        
+        return {
+            "success": True, 
+            "urls_processed": len(urls), 
+            "output_file": output_file
+        }
+        
+    except Exception as e:
+        logger.error(f"Error processing chunk {output_file}: {e}")
+        return {
+            "success": False, 
+            "error": str(e), 
+            "urls_processed": 0,
+            "output_file": output_file
+        }
+
+async def check_external_links_async(urls: list, audit_id: int, url_to_source_mapping: dict = None) -> dict:
+    """
+    Asynchronously check external links using chunked processing.
+    This prevents blocking and handles domain collisions intelligently.
+    """
+    if not urls:
+        logger.info(f"No external links to check for audit_id: {audit_id}")
+        return {
+            "unreachable_links": [],
+            "broken_links": [],
+            "permission_issues": [],
+            "method_issues": [],
+            "other_client_errors": []
+        }
+    
+    # Limit total URLs to prevent excessive processing
+    MAX_EXTERNAL_LINKS = 100
+    if len(urls) > MAX_EXTERNAL_LINKS:
+        logger.warning(f"Too many external links ({len(urls)}) for audit_id: {audit_id}. Limiting to {MAX_EXTERNAL_LINKS}")
+        urls = urls[:MAX_EXTERNAL_LINKS]
+    
+    # Create domain-aware chunks
+    chunks = chunk_urls_by_domain(urls, max_chunk_size=20)
+    logger.info(f"Processing {len(urls)} external links in {len(chunks)} chunks for audit_id: {audit_id}")
+    
+    # Prepare output files for each chunk
+    os.makedirs('results', exist_ok=True)
+    chunk_files = [f"results/headers_{audit_id}_chunk_{i}.jl" for i in range(len(chunks))]
+    
+    # Semaphore to limit concurrent chunks (prevents overwhelming the system)
+    semaphore = asyncio.Semaphore(3)  # Max 3 concurrent chunks
+    
+    async def process_chunk_async(chunk_urls: list, output_file: str, chunk_id: int):
+        """Process a single chunk asynchronously."""
+        async with semaphore:
+            logger.info(f"Processing chunk {chunk_id} with {len(chunk_urls)} URLs for audit_id: {audit_id}")
+            
+            loop = asyncio.get_event_loop()
+            
+            # Run advertools in thread pool to avoid blocking
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                try:
+                    # Set timeout for individual chunk processing
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(executor, run_advertools_chunk, chunk_urls, output_file),
+                        timeout=300  # 5 minutes per chunk
+                    )
+                    return result
+                except asyncio.TimeoutError:
+                    logger.error(f"Chunk {chunk_id} timed out for audit_id: {audit_id}")
+                    return {
+                        "success": False,
+                        "error": "Timeout",
+                        "urls_processed": 0,
+                        "output_file": output_file
+                    }
+                except Exception as e:
+                    logger.error(f"Error processing chunk {chunk_id} for audit_id: {audit_id}: {e}")
+                    return {
+                        "success": False,
+                        "error": str(e),
+                        "urls_processed": 0,
+                        "output_file": output_file
+                    }
+    
+    # Process all chunks concurrently
+    start_time = time.time()
+    tasks = [
+        process_chunk_async(chunk, chunk_file, i) 
+        for i, (chunk, chunk_file) in enumerate(zip(chunks, chunk_files))
+    ]
+    
+    try:
+        # Wait for all chunks with overall timeout
+        chunk_results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=600  # 10 minutes total
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Overall external link checking timed out for audit_id: {audit_id}")
+        chunk_results = [{"success": False, "error": "Overall timeout", "output_file": f} for f in chunk_files]
+    
+    elapsed_time = time.time() - start_time
+    logger.info(f"External link checking completed for audit_id: {audit_id} in {elapsed_time:.2f} seconds")
+    
+    # Merge results from all chunks
+    external_links_report = {
+        "unreachable_links": [],
+        "broken_links": [],
+        "permission_issues": [],
+        "method_issues": [],
+        "other_client_errors": []
+    }
+    
+    successful_chunks = 0
+    total_urls_processed = 0
+    
+    for i, result in enumerate(chunk_results):
+        if isinstance(result, Exception):
+            logger.error(f"Chunk {i} failed with exception: {result}")
+            continue
+            
+        if not result.get("success", False):
+            logger.warning(f"Chunk {i} failed: {result.get('error', 'Unknown error')}")
+            continue
+        
+        successful_chunks += 1
+        total_urls_processed += result.get("urls_processed", 0)
+        
+        # Process the chunk results
+        chunk_file = result.get("output_file")
+        if chunk_file and os.path.exists(chunk_file):
+            try:
+                headers_df = pd.read_json(chunk_file, lines=True)
+                
+                if not headers_df.empty and 'status' in headers_df.columns:
+                    headers_df['status'] = headers_df['status'].fillna(-1).astype(int)
+                    error_headers = headers_df[~headers_df['status'].between(200, 399)]
+                    
+                    for _, row in error_headers.iterrows():
+                        status = row['status']
+                        url = row.get('url', 'Unknown')
+                        # Use actual source URL from mapping, fallback to 'External Link Check'
+                        source_url = 'External Link Check'
+                        if url_to_source_mapping and url in url_to_source_mapping:
+                            source_url = url_to_source_mapping[url]
+                        
+                        link_info = {
+                            'url': url,
+                            'status': 'Unreachable' if status == -1 else status,
+                            'source_url': source_url
+                        }
+                        
+                        if status == -1:
+                            external_links_report["unreachable_links"].append(link_info)
+                        elif status in [404, 410]:
+                            external_links_report["broken_links"].append(link_info)
+                        elif status == 403:
+                            external_links_report["permission_issues"].append(link_info)
+                        elif status == 405:
+                            external_links_report["method_issues"].append(link_info)
+                        elif 400 <= status < 500:
+                            external_links_report["other_client_errors"].append(link_info)
+                
+            except Exception as e:
+                logger.error(f"Error processing results from {chunk_file}: {e}")
+            finally:
+                # Clean up chunk file
+                try:
+                    os.remove(chunk_file)
+                except OSError:
+                    pass
+    
+    logger.info(f"External link summary for audit_id {audit_id}: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed")
+    
+    return external_links_report
+
+# --- End Async External Link Functions ---
