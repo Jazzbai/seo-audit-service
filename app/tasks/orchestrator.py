@@ -198,56 +198,103 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
             else:
                 page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
             
-            # Handle H1 safely
-            h1s = [h.strip() for h in row.get('h1', '').split('@@') if h.strip()] if pd.notna(row.get('h1')) else []
-            if len(h1s) == 1:
-                pages_with_one_h1 += 1
-                page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1s[0]})
-            elif len(h1s) == 0:
+            # Handle H1 tags
+            h1_tags = row.get('h1', [])
+            if pd.isna(h1_tags) or (isinstance(h1_tags, list) and len(h1_tags) == 0):
                 pages_with_no_h1 += 1
                 page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
-            else:
+            elif isinstance(h1_tags, list) and len(h1_tags) == 1:
+                pages_with_one_h1 += 1
+                page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1_tags[0]})
+            elif isinstance(h1_tags, list) and len(h1_tags) > 1:
                 pages_with_multiple_h1s += 1
-                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1s)} H1 tags. Expected 1.", "count": len(h1s), "value": h1s})
+                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1_tags)} H1 tags. Expected 1.", "count": len(h1_tags), "value": h1_tags})
+            else:
+                # Handle non-list H1 tags
+                if h1_tags:
+                    pages_with_one_h1 += 1
+                    page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": str(h1_tags)})
+                else:
+                    pages_with_no_h1 += 1
+                    page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
+            
             page_level_report[url] = page_report
+
     except Exception as e:
-        error_msg = f"Failed to process page-level data: {str(e)}"
-        logger.error(f"Page processing error for audit_id {audit_id}: {error_msg}")
+        error_msg = f"Failed to compile page-level report: {str(e)}"
+        logger.error(f"Error compiling page report for audit_id {audit_id}: {error_msg}")
         _mark_audit_failed(audit_id, error_msg)
         raise
 
-    # Handle broken links safely - check if 'status' column exists
-    broken_links_report = []
+    # Categorize internal links with same logic as external links
+    internal_unreachable_links = []
+    internal_broken_links = []
+    internal_permission_issue_links = []
+    internal_method_issue_links = []
+    internal_other_client_errors = []
+
     try:
         if 'status' in crawl_df.columns:
-            broken_links_df = crawl_df[crawl_df['status'] >= 400].copy()
+            error_links_df = crawl_df[crawl_df['status'] >= 400].copy()
             referer_col = 'request_headers_Referer'
-            if referer_col in broken_links_df.columns:
-                broken_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
-                broken_links_df['source_url'] = broken_links_df['source_url'].where(pd.notna(broken_links_df['source_url']), None)
-                broken_links_report = broken_links_df[['url', 'status', 'source_url']].to_dict('records')
+            if referer_col in error_links_df.columns:
+                error_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
+                error_links_df['source_url'] = error_links_df['source_url'].where(pd.notna(error_links_df['source_url']), 'Internal Navigation')
             else:
-                broken_links_report = broken_links_df[['url', 'status']].to_dict('records')
+                error_links_df['source_url'] = 'Internal Navigation'
+            
+            internal_false_positives_filtered = 0
+            
+            # Categorize internal links by status code (same logic as external links)
+            for _, row in error_links_df.iterrows():
+                url = row.get('url', 'Unknown URL')
+                status = row.get('status', -1)
+                source_url = row.get('source_url', 'Internal Navigation')
+                
+                # Apply false positive filtering to internal links too
+                is_false_pos, reason = is_likely_false_positive(url, status)
+                if is_false_pos:
+                    internal_false_positives_filtered += 1
+                    logger.info(f"Filtered internal false positive: {url} ({status}) - {reason}")
+                    continue  # Skip this URL
+                
+                link_info = {
+                    'url': url,
+                    'status': status,
+                    'source_url': source_url
+                }
+                
+                if status == -1:
+                    internal_unreachable_links.append(link_info)
+                elif status in [404, 410]:
+                    internal_broken_links.append(link_info)
+                elif status == 403:
+                    internal_permission_issue_links.append(link_info)
+                elif status == 405:
+                    internal_method_issue_links.append(link_info)
+                elif 400 <= status < 500:
+                    internal_other_client_errors.append(link_info)
+            
+            if internal_false_positives_filtered > 0:
+                logger.info(f"Filtered {internal_false_positives_filtered} internal false positives for audit_id {audit_id}")
         else:
             # Handle timeout/error cases where no status column exists
             logger.warning(f"No 'status' column found in crawl data for audit_id {audit_id}. Checking for error records.")
             # Look for timeout/error indicators in the data
-            error_rows = []
             for _, row in crawl_df.iterrows():
                 url = row.get('url', 'Unknown URL')
                 # Check for common error indicators
                 if pd.isna(row.get('title')) and pd.isna(row.get('meta_desc')) and pd.isna(row.get('h1')):
                     # This suggests a failed request (timeout, connection error, etc.)
-                    error_rows.append({
+                    internal_unreachable_links.append({
                         'url': url,
-                        'status': 'Timeout/Error'  # Generic error status for display
+                        'status': 'Unreachable',
+                        'source_url': 'Timeout/Error'
                     })
-            broken_links_report = error_rows
-            if error_rows:
-                logger.info(f"Found {len(error_rows)} error records (likely timeouts) for audit_id {audit_id}")
+            if internal_unreachable_links:
+                logger.info(f"Found {len(internal_unreachable_links)} unreachable internal links (likely timeouts) for audit_id {audit_id}")
     except Exception as e:
-        logger.error(f"Failed to process broken links for audit_id {audit_id}: {e}")
-        broken_links_report = []
+        logger.error(f"Failed to process internal links for audit_id {audit_id}: {e}")
 
     links_to_check = []
     try:
@@ -266,13 +313,26 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
     except Exception as e:
         logger.error(f"Failed to extract external links for audit_id {audit_id}: {e}", exc_info=True)
 
+    # Calculate total internal link issues
+    total_internal_links_with_issues = (
+        len(internal_unreachable_links) + 
+        len(internal_broken_links) + 
+        len(internal_permission_issue_links) + 
+        len(internal_method_issue_links) + 
+        len(internal_other_client_errors)
+    )
+
     total_pages = len(page_level_report)
     initial_report = {
         "status": "ANALYZING_EXTERNAL",
         "audit_id": audit_id,
         "summary": {
             "total_pages_analyzed": total_pages,
-            "internal_broken_links_found": len(broken_links_report),
+            "internal_unreachable_links_found": len(internal_unreachable_links),
+            "internal_broken_links_found": len(internal_broken_links),
+            "internal_permission_issues_found": len(internal_permission_issue_links),
+            "internal_method_issues_found": len(internal_method_issue_links),
+            "internal_other_client_errors_found": len(internal_other_client_errors),
             "pages_missing_title": total_pages - pages_with_title,
             "pages_missing_meta_description": total_pages - pages_with_meta_desc,
             "pages_with_correct_h1": pages_with_one_h1,
@@ -281,7 +341,11 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
             "top_10_title_words": _get_top_words(crawl_df['title']) if 'title' in crawl_df.columns else [],
             "top_10_h1_words": _get_top_words(crawl_df['h1']) if 'h1' in crawl_df.columns else [],
         },
-        "internal_broken_links": broken_links_report,
+        "internal_unreachable_links": internal_unreachable_links,
+        "internal_broken_links": internal_broken_links,
+        "internal_permission_issue_links": internal_permission_issue_links,
+        "internal_method_issue_links": internal_method_issue_links,
+        "internal_other_client_errors": internal_other_client_errors,
         "page_level_report": page_level_report
     }
 
@@ -396,7 +460,11 @@ def save_final_report(self, previous_task_output: dict, audit_id: int):
             "external_permission_issue_links": permission_issues,
             "external_method_issue_links": method_issues,
             "external_other_client_errors": other_client_errors,
+            "internal_unreachable_links": report_json["internal_unreachable_links"],
             "internal_broken_links": report_json["internal_broken_links"],
+            "internal_permission_issue_links": report_json["internal_permission_issue_links"],
+            "internal_method_issue_links": report_json["internal_method_issue_links"],
+            "internal_other_client_errors": report_json["internal_other_client_errors"],
             "page_level_report": report_json["page_level_report"]
         }
         
@@ -544,39 +612,117 @@ def chunk_urls_by_domain(urls: list, max_chunk_size: int = 20) -> list:
 
 def get_domain_safe_settings(urls: list) -> dict:
     """
-    Get advertools settings optimized for the domains in the URL list.
-    More conservative for single domain, more aggressive for multiple domains.
+    Returns domain-optimized crawler settings.
+    - Single domain: Conservative crawling
+    - Multiple domains: More concurrent
+    - Auth-sensitive domains: Gentle with realistic browser fingerprinting
     """
+    
+    def requires_gentle_crawling(url: str) -> bool:
+        """Check if URL requires authentication-sensitive crawling settings."""
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url.lower())
+            hostname = parsed.hostname or ''
+            path = parsed.path or ''
+            
+            # Authentication subdomain patterns
+            auth_subdomains = ['account.', 'auth.', 'login.', 'sso.', 'admin.', 'dashboard.', 'portal.', 'secure.']
+            if any(hostname.startswith(subdomain) for subdomain in auth_subdomains):
+                return True
+                
+            # Social media and known crawler-blocking domains
+            crawler_blocking_patterns = ['facebook.com', 'twitter.com', 'x.com', 'instagram.com', 'linkedin.com']
+            if any(pattern in hostname for pattern in crawler_blocking_patterns):
+                return True
+                
+            # Authentication path patterns
+            auth_paths = ['/auth/', '/login/', '/dashboard/', '/admin/', '/account/', '/profile/', '/membership/']
+            if any(auth_path in path for auth_path in auth_paths):
+                return True
+                
+            return False
+        except Exception:
+            return False
+    
     domains = set()
+    auth_domains_found = []
+    
     for url in urls:
         try:
-            domains.add(urlparse(url).netloc)
+            domain = urlparse(url).netloc
+            domains.add(domain)
+            if requires_gentle_crawling(url):
+                auth_domains_found.append(domain)
         except Exception:
             continue
-    
-    if len(domains) <= 1:
-        # Single domain - be conservative to avoid getting blocked
+
+    # Industry-standard realistic browser headers for 2025
+    realistic_headers = {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8,es;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'Cache-Control': 'max-age=0',
+        'Connection': 'keep-alive',
+        'DNT': '1',
+        'Pragma': 'no-cache',
+        'Upgrade-Insecure-Requests': '1',
+        'sec-ch-ua': '"Google Chrome";v="134", "Chromium";v="134", "Not_A Brand";v="24"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'none',
+        'sec-fetch-user': '?1',
+    }
+
+    # If we have auth-required domains, use more gentle settings
+    if auth_domains_found:
+        logger.info(f"Detected authentication-sensitive domains: {len(auth_domains_found)} domains, using gentle settings")
         return {
             'ROBOTSTXT_OBEY': False,
-            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+            'DOWNLOAD_DELAY': 3,  # Longer delay for auth domains
+            'CONCURRENT_REQUESTS_PER_DOMAIN': 1,  # More conservative
+            'RANDOMIZE_DOWNLOAD_DELAY': True,
+            'DOWNLOAD_TIMEOUT': 15,  # Longer timeout
+            'DNS_TIMEOUT': 8,
+            'RETRY_ENABLED': True,  # Enable retries
+            'RETRY_TIMES': 2,
+            'REDIRECT_ENABLED': True,
+            'REDIRECT_MAX_TIMES': 5,
+            'DEFAULT_REQUEST_HEADERS': realistic_headers
+        }
+
+    # Single domain - conservative approach
+    if len(domains) == 1:
+        return {
+            'ROBOTSTXT_OBEY': False,
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
             'DOWNLOAD_DELAY': 2,
             'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
             'RANDOMIZE_DOWNLOAD_DELAY': True,
-            'DOWNLOAD_TIMEOUT': 15,
-            'DNS_TIMEOUT': 10,
-            'RETRY_ENABLED': False,
+            'DOWNLOAD_TIMEOUT': 12,
+            'DNS_TIMEOUT': 6,
+            'RETRY_ENABLED': True,
+            'RETRY_TIMES': 1,
+            'REDIRECT_ENABLED': True,
+            'DEFAULT_REQUEST_HEADERS': realistic_headers
         }
     else:
         # Multiple domains - can be more aggressive
         return {
             'ROBOTSTXT_OBEY': False,
-            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
             'DOWNLOAD_DELAY': 1,
             'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
             'RANDOMIZE_DOWNLOAD_DELAY': True,
             'DOWNLOAD_TIMEOUT': 10,
             'DNS_TIMEOUT': 5,
-            'RETRY_ENABLED': False,
+            'RETRY_ENABLED': True,
+            'RETRY_TIMES': 1,
+            'REDIRECT_ENABLED': True,
+            'DEFAULT_REQUEST_HEADERS': realistic_headers
         }
 
 def run_advertools_chunk(urls: list, output_file: str) -> dict:
@@ -608,6 +754,187 @@ def run_advertools_chunk(urls: list, output_file: str) -> dict:
             "urls_processed": 0,
             "output_file": output_file
         }
+
+def is_likely_false_positive(url: str, status: int) -> tuple[bool, str]:
+    """
+    Identify likely false positives using industry-standard heuristic patterns.
+    Uses HTTP response analysis and common authentication indicators rather than hardcoded domains.
+    
+    Returns (is_false_positive, reason)
+    """
+    # Only apply false positive filtering to 4xx client errors
+    if status < 400 or status >= 500:
+        return False, ""
+    
+    url_lower = url.lower()
+    
+    # Industry-standard pattern-based detection (not domain-specific)
+    auth_patterns = [
+        # Authentication/Session endpoints - universal patterns
+        ('/auth/', 'Authentication endpoint'),
+        ('/login/', 'Login endpoint'),  
+        ('/signin/', 'Sign-in endpoint'),
+        ('/logout/', 'Logout endpoint'),
+        ('/dashboard/', 'User dashboard - typically requires authentication'),
+        ('/profile/', 'User profile - requires authentication'),
+        ('/account/', 'Account management - requires authentication'),
+        ('/membership/', 'Membership area - requires authentication'),
+        ('/admin/', 'Admin area - requires authentication'),
+        ('/user/', 'User-specific content'),
+        ('/my-', 'User-specific "my" pages'),
+        ('/settings/', 'User settings - requires authentication'),
+        
+        # API endpoints that typically require authentication
+        ('/api/user', 'User API endpoint'),
+        ('/api/auth', 'Authentication API'),
+        ('/api/account', 'Account API'),
+        ('/api/profile', 'Profile API'),
+        ('/api/dashboard', 'Dashboard API'),
+        
+        # Session/Token related patterns
+        ('sessionid=', 'Contains session identifier'),
+        ('token=', 'Contains authentication token'),
+        ('auth_token=', 'Contains auth token parameter'),
+        ('access_token=', 'Contains access token'),
+        
+        # Common authentication URL patterns
+        ('oauth', 'OAuth authentication flow'),
+        ('sso/', 'Single Sign-On endpoint'),
+        ('saml/', 'SAML authentication'),
+        ('jwt/', 'JWT token endpoint'),
+    ]
+    
+    # Check URL path patterns
+    for pattern, reason in auth_patterns:
+        if pattern in url_lower:
+            return True, f"Authentication-required: {reason}"
+    
+    # Subdomain patterns that typically require authentication
+    auth_subdomains = [
+        'account.',     # account.domain.com
+        'auth.',        # auth.domain.com  
+        'login.',       # login.domain.com
+        'sso.',         # sso.domain.com
+        'admin.',       # admin.domain.com
+        'dashboard.',   # dashboard.domain.com
+        'portal.',      # portal.domain.com
+        'app.',         # app.domain.com (often requires login)
+        'my.',          # my.domain.com
+        'user.',        # user.domain.com
+        'member.',      # member.domain.com
+        'secure.',      # secure.domain.com
+    ]
+    
+    # Check subdomain patterns
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url_lower)
+        hostname = parsed.hostname or ''
+        
+        for subdomain_pattern in auth_subdomains:
+            if hostname.startswith(subdomain_pattern):
+                return True, f"Authentication subdomain: {subdomain_pattern}*"
+                
+    except Exception:
+        pass  # If URL parsing fails, continue with other checks
+    
+    # Social media and major platforms that block crawlers (404/403 errors)
+    social_media_indicators = [
+        ('facebook.com', 'Facebook blocks automated requests'),
+        ('twitter.com', 'Twitter blocks automated access'), 
+        ('x.com', 'X (Twitter) blocks automated access'),
+        ('instagram.com', 'Instagram blocks automated access'),
+        ('linkedin.com', 'LinkedIn blocks automated access'),
+        ('tiktok.com', 'TikTok blocks automated access'),
+        ('youtube.com/user/', 'YouTube user pages block crawlers'),
+        ('github.com/settings', 'GitHub settings require authentication'),
+        ('pinterest.com', 'Pinterest blocks automated access'),
+        ('snapchat.com', 'Snapchat blocks automated access'),
+    ]
+    
+    for indicator, reason in social_media_indicators:
+        if indicator in url_lower:
+            return True, f"Social media: {reason}"
+    
+    # Marketing and tracking domains that commonly block crawlers
+    marketing_tracking_patterns = [
+        ('attn.tv', 'Marketing tracking domain blocks crawlers'),
+        ('doubleclick.net', 'Google advertising tracking'),
+        ('googlesyndication.com', 'Google ads tracking'),
+        ('googletagmanager.com', 'Google Tag Manager'),
+        ('googleadservices.com', 'Google advertising'),
+        ('facebook.com/tr', 'Facebook pixel tracking'),
+        ('analytics.google.com', 'Google Analytics'),
+        ('google-analytics.com', 'Google Analytics'),
+        ('amplitude.com', 'Analytics tracking'),
+        ('mixpanel.com', 'Analytics tracking'),
+        ('segment.com', 'Analytics tracking'),
+        ('hotjar.com', 'User analytics'),
+        ('zendesk.com/embeddable', 'Zendesk widget'),
+        ('intercom.io', 'Customer support widget'),
+        ('.tracking.', 'Tracking domain'),
+        ('.analytics.', 'Analytics domain'),
+    ]
+    
+    for pattern, reason in marketing_tracking_patterns:
+        if pattern in url_lower:
+            return True, f"Marketing/tracking: {reason}"
+    
+    # Partner/redirect domains that require proper referrers
+    partner_redirect_patterns = [
+        ('/go/', 'Partner redirect link requires referrer'),
+        ('/redirect/', 'Redirect endpoint requires referrer'),
+        ('/r/', 'Short redirect link'),
+        ('/link/', 'Link redirect'),
+        ('/out/', 'Outbound link redirect'),
+        ('/track/', 'Tracking redirect'),
+        ('/click/', 'Click tracking'),
+        ('hp.com/go/', 'HP partner redirect requires referrer'),
+        ('hp.com/support/', 'HP support partner link requires referrer'),
+        ('adobe.com/go/', 'Adobe partner redirect'),
+        ('microsoft.com/en-us/p/', 'Microsoft partner link'),
+        ('amazon.com/dp/', 'Amazon product link may require referrer'),
+    ]
+    
+    for pattern, reason in partner_redirect_patterns:
+        if pattern in url_lower:
+            return True, f"Partner/redirect: {reason}"
+    
+    # Subsidiary and enterprise domains that often have bot protection
+    subsidiary_enterprise_patterns = [
+        ('dacor.com', 'Samsung subsidiary with bot protection'),
+        ('harman.com', 'Samsung subsidiary'),
+        ('joyent.com', 'Samsung subsidiary'),
+        ('smartthings.com', 'Samsung subsidiary'),
+        ('viv.ai', 'Samsung subsidiary'),
+        ('.enterprise.', 'Enterprise subdomain'),
+        ('.corp.', 'Corporate subdomain'),
+        ('.internal.', 'Internal subdomain'),
+        ('.intranet.', 'Intranet subdomain'),
+    ]
+    
+    for pattern, reason in subsidiary_enterprise_patterns:
+        if pattern in url_lower:
+            return True, f"Subsidiary/enterprise: {reason}"
+    
+    # CDN and asset domains that may block direct access
+    cdn_asset_patterns = [
+        ('.cloudfront.net', 'AWS CloudFront CDN'),
+        ('.fastly.com', 'Fastly CDN'),
+        ('.jsdelivr.net', 'jsDelivr CDN'),
+        ('.unpkg.com', 'unpkg CDN'),
+        ('.bootstrapcdn.com', 'Bootstrap CDN'),
+        ('assets.', 'Asset subdomain'),
+        ('static.', 'Static asset subdomain'),
+        ('cdn.', 'CDN subdomain'),
+        ('media.', 'Media subdomain'),
+    ]
+    
+    for pattern, reason in cdn_asset_patterns:
+        if pattern in url_lower:
+            return True, f"CDN/asset: {reason}"
+    
+    return False, ""
 
 async def check_external_links_async(urls: list, audit_id: int, url_to_source_mapping: dict = None) -> dict:
     """
@@ -705,6 +1032,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     
     successful_chunks = 0
     total_urls_processed = 0
+    false_positives_filtered = 0
     
     for i, result in enumerate(chunk_results):
         if isinstance(result, Exception):
@@ -731,6 +1059,14 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                     for _, row in error_headers.iterrows():
                         status = row['status']
                         url = row.get('url', 'Unknown')
+                        
+                        # Check for false positives before categorizing
+                        is_false_pos, reason = is_likely_false_positive(url, status)
+                        if is_false_pos:
+                            false_positives_filtered += 1
+                            logger.info(f"Filtered false positive: {url} (404) - {reason}")
+                            continue  # Skip this URL
+                        
                         # Use actual source URL from mapping, fallback to 'External Link Check'
                         source_url = 'External Link Check'
                         if url_to_source_mapping and url in url_to_source_mapping:
@@ -762,7 +1098,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                 except OSError:
                     pass
     
-    logger.info(f"External link summary for audit_id {audit_id}: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed")
+    logger.info(f"External link summary for audit_id {audit_id}: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed, {false_positives_filtered} false positives filtered")
     
     return external_links_report
 
