@@ -18,6 +18,7 @@ from app.utils.error_handler import (
     check_domain_exists, 
     validate_crawl_output
 )
+from app.utils.logging_manager import TaskLogger, logging_manager
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -69,302 +70,372 @@ def _mark_audit_failed(audit_id: int, error_message: str, url: str = None):
                 audit.report_json = {}
                 audit.completed_at = datetime.datetime.utcnow()
                 db.commit()
-                logger.info(f"Marked audit {audit_id} as {error_info['status']}: {error_info['user_message']}")
+                logging_manager.log_system_event("app", "info", f"Marked audit {audit_id} as {error_info['status']}: {error_info['user_message']}")
                 
                 # Send webhook for failed audits too (only once)
                 if settings.DASHBOARD_CALLBACK_URL:
-                    logger.info(f"Dashboard callback URL is set, queueing callback task for failed audit_id: {audit_id}")
+                    logging_manager.log_system_event("app", "info", f"Dashboard callback URL is set, queueing callback task for failed audit_id: {audit_id}")
                     send_report_to_dashboard.delay(audit_id=audit_id)
                 else:
-                    logger.info(f"No dashboard callback URL configured. Skipping callback for failed audit_id: {audit_id}")
+                    logging_manager.log_system_event("app", "info", f"No dashboard callback URL configured. Skipping callback for failed audit_id: {audit_id}")
             else:
-                logger.info(f"Audit {audit_id} already in final state {audit.status}, skipping duplicate update")
+                logging_manager.log_system_event("app", "info", f"Audit {audit_id} already in final state {audit.status}, skipping duplicate update")
                 
     except Exception as db_error:
-        logger.error(f"Failed to update audit {audit_id} status: {db_error}")
+        logging_manager.log_system_event("app", "error", f"Failed to update audit {audit_id} status: {db_error}")
     finally:
         db.close()
 
 @celery_app.task(bind=True)
 def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
-    logger.info(f"Starting advertools crawl for audit_id: {audit_id}, url: {url}")
-    
-    # Pre-flight URL validation
-    url_valid, url_error = is_valid_url(url)
-    if not url_valid:
-        error_msg = f"Invalid URL format: {url_error}"
-        logger.error(f"URL validation failed for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg, url)
-        raise ValueError(error_msg)
-    
-    # Check if domain exists
-    domain_exists, domain_error = check_domain_exists(url)
-    if not domain_exists:
-        error_msg = f"Domain validation failed: {domain_error}"
-        logger.error(f"Domain check failed for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg, url)
-        raise ValueError(error_msg)
-    
-    os.makedirs('results', exist_ok=True)
-    os.makedirs('logs', exist_ok=True)
-    output_file = f"results/audit_results_{audit_id}.jl"
-    log_file = f"logs/audit_log_{audit_id}.log"
-    
-    custom_settings = {
-        'DOWNLOAD_DELAY': 1,
-        'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
-        'ROBOTSTXT_OBEY': False,
-        'CLOSESPIDER_PAGECOUNT': max_pages,
-        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'LOG_FILE': log_file,
-        'DOWNLOAD_TIMEOUT': 30,
-        'DNS_TIMEOUT': 10,
+    task_context = {
+        "url": url,
+        "max_pages": max_pages,
+        "task_id": self.request.id
     }
     
-    try:
-        adv.crawl(url_list=url, output_file=output_file, follow_links=True, custom_settings=custom_settings)
+    with TaskLogger(audit_id=audit_id, task_name="run_advertools_crawl", 
+                   task_id=self.request.id, context=task_context) as task_logger:
         
-        # Validate crawl output
-        output_valid, output_error = validate_crawl_output(output_file)
-        if not output_valid:
-            error_msg = f"Crawl validation failed: {output_error}"
-            logger.error(f"Crawl output validation failed for audit_id {audit_id}: {error_msg}")
+        task_logger.log("info", f"Starting advertools crawl", {
+            "url": url,
+            "max_pages": max_pages
+        })
+        
+        # Pre-flight URL validation
+        task_logger.log("info", "Validating URL format")
+        url_valid, url_error = is_valid_url(url)
+        if not url_valid:
+            error_msg = f"Invalid URL format: {url_error}"
+            task_logger.log("error", "URL validation failed", {"error": error_msg})
             _mark_audit_failed(audit_id, error_msg, url)
             raise ValueError(error_msg)
         
-        logger.info(f"Crawl finished for audit_id: {audit_id}. Results in: {output_file}")
-        return output_file
+        # Check if domain exists
+        task_logger.log("info", "Checking domain existence")
+        domain_exists, domain_error = check_domain_exists(url)
+        if not domain_exists:
+            error_msg = f"Domain validation failed: {domain_error}"
+            task_logger.log("error", "Domain check failed", {"error": error_msg})
+            _mark_audit_failed(audit_id, error_msg, url)
+            raise ValueError(error_msg)
         
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Advertools crawl failed for audit_id: {audit_id} with error: {error_msg}", exc_info=True)
-        _mark_audit_failed(audit_id, error_msg, url)
-        raise
+        task_logger.log("info", "Setting up crawl directories and files")
+        os.makedirs('results', exist_ok=True)
+        os.makedirs('logs', exist_ok=True)
+        output_file = f"results/audit_results_{audit_id}.jl"
+        log_file = f"logs/advertools/audit_log_{audit_id}.log"
+        
+        custom_settings = {
+            'DOWNLOAD_DELAY': 1,
+            'CONCURRENT_REQUESTS_PER_DOMAIN': 2,
+            'ROBOTSTXT_OBEY': False,
+            'CLOSESPIDER_PAGECOUNT': max_pages,
+            'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'LOG_FILE': log_file,
+            'DOWNLOAD_TIMEOUT': 30,
+            'DNS_TIMEOUT': 10,
+        }
+        
+        task_logger.log("info", "Starting advertools crawl execution", {
+            "output_file": output_file,
+            "log_file": log_file,
+            "settings": custom_settings
+        })
+        
+        try:
+            adv.crawl(url_list=url, output_file=output_file, follow_links=True, custom_settings=custom_settings)
+            
+            # Validate crawl output
+            task_logger.log("info", "Validating crawl output")
+            output_valid, output_error = validate_crawl_output(output_file)
+            if not output_valid:
+                error_msg = f"Crawl validation failed: {output_error}"
+                task_logger.log("error", "Crawl output validation failed", {"error": error_msg})
+                _mark_audit_failed(audit_id, error_msg, url)
+                raise ValueError(error_msg)
+            
+            task_logger.log("info", "Crawl completed successfully", {
+                "output_file": output_file
+            })
+            return output_file
+            
+        except Exception as e:
+            error_msg = str(e)
+            task_logger.log("error", "Advertools crawl failed", {
+                "error": error_msg,
+                "exception_type": type(e).__name__
+            })
+            _mark_audit_failed(audit_id, error_msg, url)
+            raise
 
 @celery_app.task(bind=True)
 def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> dict:
-    logger.info(f"Compiling report for audit_id: {audit_id} from file: {crawl_output_file}")
+    task_context = {
+        "crawl_output_file": crawl_output_file,
+        "task_id": self.request.id
+    }
     
-    try:
-        # Validate crawl output first
-        output_valid, output_error = validate_crawl_output(crawl_output_file)
-        if not output_valid:
-            error_msg = f"Invalid crawl output: {output_error}"
-            logger.error(f"Crawl output validation failed for audit_id {audit_id}: {error_msg}")
-            _mark_audit_failed(audit_id, error_msg)
-            raise ValueError(error_msg)
+    with TaskLogger(audit_id=audit_id, task_name="compile_report_from_crawl", 
+                   task_id=self.request.id, context=task_context) as task_logger:
         
-        crawl_df = pd.read_json(crawl_output_file, lines=True)
+        task_logger.log("info", "Starting report compilation", {
+            "crawl_output_file": crawl_output_file
+        })
         
-        # Additional validation for required columns
-        if crawl_df.empty:
-            error_msg = "Crawl produced no analyzable data"
-            logger.error(f"Empty crawl results for audit_id {audit_id}")
-            _mark_audit_failed(audit_id, error_msg)
-            raise ValueError(error_msg)
+        try:
+            # Validate crawl output first
+            task_logger.log("info", "Validating crawl output file")
+            output_valid, output_error = validate_crawl_output(crawl_output_file)
+            if not output_valid:
+                error_msg = f"Invalid crawl output: {output_error}"
+                task_logger.log("error", "Crawl output validation failed", {"error": error_msg})
+                _mark_audit_failed(audit_id, error_msg)
+                raise ValueError(error_msg)
             
-    except FileNotFoundError:
-        error_msg = f"Crawl output file not found: {crawl_output_file}"
-        logger.error(f"File not found for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg)
-        raise
-    except Exception as e:
-        error_msg = f"Failed to read crawl output: {str(e)}"
-        logger.error(f"Error reading crawl file for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg)
-        raise
+            task_logger.log("info", "Reading crawl data from JSON file")
+            crawl_df = pd.read_json(crawl_output_file, lines=True)
+            
+            # Additional validation for required columns
+            if crawl_df.empty:
+                error_msg = "Crawl produced no analyzable data"
+                task_logger.log("error", "Empty crawl results", {"error": error_msg})
+                _mark_audit_failed(audit_id, error_msg)
+                raise ValueError(error_msg)
+                
+            task_logger.log("info", "Crawl data loaded successfully", {
+                "total_pages": len(crawl_df)
+            })
+                
+        except FileNotFoundError:
+            error_msg = f"Crawl output file not found: {crawl_output_file}"
+            task_logger.log("error", "Crawl output file not found", {"error": error_msg})
+            _mark_audit_failed(audit_id, error_msg)
+            raise
+        except Exception as e:
+            error_msg = f"Failed to read crawl output: {str(e)}"
+            task_logger.log("error", "Error reading crawl file", {
+                "error": error_msg,
+                "exception_type": type(e).__name__
+            })
+            _mark_audit_failed(audit_id, error_msg)
+            raise
 
-    try:
-        page_level_report = {}
-        pages_with_title, pages_with_meta_desc, pages_with_one_h1, pages_with_multiple_h1s, pages_with_no_h1 = 0, 0, 0, 0, 0
-        for _, row in crawl_df.iterrows():
-            url = row.get('url')
-            if not url: continue
-            page_report = []
+        try:
+            task_logger.log("info", "Starting page-level analysis")
+            page_level_report = {}
+            pages_with_title, pages_with_meta_desc, pages_with_one_h1, pages_with_multiple_h1s, pages_with_no_h1 = 0, 0, 0, 0, 0
             
-            # Handle title safely
-            title = row.get('title')
-            if pd.notna(title) and title:
-                pages_with_title += 1
-                page_report.append({"status": "SUCCESS", "check": "title", "value": title.strip(), "message": "Title found."})
-            else:
-                page_report.append({"status": "FAILURE", "check": "title", "value": None, "message": "Title tag not found or is empty."})
-            
-            # Handle meta description safely
-            meta_desc = row.get('meta_desc')
-            if pd.notna(meta_desc) and meta_desc:
-                pages_with_meta_desc += 1
-                page_report.append({"status": "SUCCESS", "check": "meta_description", "value": meta_desc.strip(), "message": "Meta description found."})
-            else:
-                page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
-            
-            # Handle H1 tags
-            h1_tags = row.get('h1', [])
-            if pd.isna(h1_tags) or (isinstance(h1_tags, list) and len(h1_tags) == 0):
-                pages_with_no_h1 += 1
-                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
-            elif isinstance(h1_tags, list) and len(h1_tags) == 1:
-                pages_with_one_h1 += 1
-                page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1_tags[0]})
-            elif isinstance(h1_tags, list) and len(h1_tags) > 1:
-                pages_with_multiple_h1s += 1
-                page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1_tags)} H1 tags. Expected 1.", "count": len(h1_tags), "value": h1_tags})
-            else:
-                # Handle non-list H1 tags
-                if h1_tags:
-                    pages_with_one_h1 += 1
-                    page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": str(h1_tags)})
+            for _, row in crawl_df.iterrows():
+                url = row.get('url')
+                if not url: continue
+                page_report = []
+                
+                # Handle title safely
+                title = row.get('title')
+                if pd.notna(title) and title:
+                    pages_with_title += 1
+                    page_report.append({"status": "SUCCESS", "check": "title", "value": title.strip(), "message": "Title found."})
                 else:
+                    page_report.append({"status": "FAILURE", "check": "title", "value": None, "message": "Title tag not found or is empty."})
+                
+                # Handle meta description safely
+                meta_desc = row.get('meta_desc')
+                if pd.notna(meta_desc) and meta_desc:
+                    pages_with_meta_desc += 1
+                    page_report.append({"status": "SUCCESS", "check": "meta_description", "value": meta_desc.strip(), "message": "Meta description found."})
+                else:
+                    page_report.append({"status": "FAILURE", "check": "meta_description", "value": None, "message": "Meta description not found or is empty."})
+                
+                # Handle H1 tags
+                h1_tags = row.get('h1', [])
+                if pd.isna(h1_tags) or (isinstance(h1_tags, list) and len(h1_tags) == 0):
                     pages_with_no_h1 += 1
                     page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
-            
-            page_level_report[url] = page_report
-
-    except Exception as e:
-        error_msg = f"Failed to compile page-level report: {str(e)}"
-        logger.error(f"Error compiling page report for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg)
-        raise
-
-    # Categorize internal links with same logic as external links
-    internal_unreachable_links = []
-    internal_broken_links = []
-    internal_permission_issue_links = []
-    internal_method_issue_links = []
-    internal_other_client_errors = []
-
-    try:
-        if 'status' in crawl_df.columns:
-            error_links_df = crawl_df[crawl_df['status'] >= 400].copy()
-            referer_col = 'request_headers_Referer'
-            if referer_col in error_links_df.columns:
-                error_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
-                error_links_df['source_url'] = error_links_df['source_url'].where(pd.notna(error_links_df['source_url']), 'Internal Navigation')
-            else:
-                error_links_df['source_url'] = 'Internal Navigation'
-            
-            internal_false_positives_filtered = 0
-            
-            # Categorize internal links by status code (same logic as external links)
-            for _, row in error_links_df.iterrows():
-                url = row.get('url', 'Unknown URL')
-                status = row.get('status', -1)
-                source_url = row.get('source_url', 'Internal Navigation')
+                elif isinstance(h1_tags, list) and len(h1_tags) == 1:
+                    pages_with_one_h1 += 1
+                    page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": h1_tags[0]})
+                elif isinstance(h1_tags, list) and len(h1_tags) > 1:
+                    pages_with_multiple_h1s += 1
+                    page_report.append({"status": "FAILURE", "check": "h1_heading", "message": f"Found {len(h1_tags)} H1 tags. Expected 1.", "count": len(h1_tags), "value": h1_tags})
+                else:
+                    # Handle non-list H1 tags
+                    if h1_tags:
+                        pages_with_one_h1 += 1
+                        page_report.append({"status": "SUCCESS", "check": "h1_heading", "message": "Exactly one H1 tag found.", "count": 1, "value": str(h1_tags)})
+                    else:
+                        pages_with_no_h1 += 1
+                        page_report.append({"status": "FAILURE", "check": "h1_heading", "message": "No H1 tag found.", "count": 0, "value": []})
                 
-                # Apply false positive filtering to internal links too
-                is_false_pos, reason = is_likely_false_positive(url, status)
-                if is_false_pos:
-                    internal_false_positives_filtered += 1
-                    logger.info(f"Filtered internal false positive: {url} ({status}) - {reason}")
-                    continue  # Skip this URL
-                
-                link_info = {
-                    'url': url,
-                    'status': status,
-                    'source_url': source_url
-                }
-                
-                if status == -1:
-                    internal_unreachable_links.append(link_info)
-                elif status in [404, 410]:
-                    internal_broken_links.append(link_info)
-                elif status == 403:
-                    internal_permission_issue_links.append(link_info)
-                elif status == 405:
-                    internal_method_issue_links.append(link_info)
-                elif 400 <= status < 500:
-                    internal_other_client_errors.append(link_info)
-            
-            if internal_false_positives_filtered > 0:
-                logger.info(f"Filtered {internal_false_positives_filtered} internal false positives for audit_id {audit_id}")
-        else:
-            # Handle timeout/error cases where no status column exists
-            logger.warning(f"No 'status' column found in crawl data for audit_id {audit_id}. Checking for error records.")
-            # Look for timeout/error indicators in the data
-            for _, row in crawl_df.iterrows():
-                url = row.get('url', 'Unknown URL')
-                # Check for common error indicators
-                if pd.isna(row.get('title')) and pd.isna(row.get('meta_desc')) and pd.isna(row.get('h1')):
-                    # This suggests a failed request (timeout, connection error, etc.)
-                    internal_unreachable_links.append({
-                        'url': url,
-                        'status': 'Unreachable',
-                        'source_url': 'Timeout/Error'
-                    })
-            if internal_unreachable_links:
-                logger.info(f"Found {len(internal_unreachable_links)} unreachable internal links (likely timeouts) for audit_id {audit_id}")
-    except Exception as e:
-        logger.error(f"Failed to process internal links for audit_id {audit_id}: {e}")
+                page_level_report[url] = page_report
 
-    links_to_check = []
-    try:
-        main_domain = urlparse(crawl_df['url'][0]).netloc
-        link_df = adv.crawlytics.links(crawl_df, internal_url_regex=main_domain)
-        
-        # Check if 'internal' column exists
-        if 'internal' in link_df.columns:
-            external_links_df = link_df[~link_df['internal']].copy()
-            external_links_df.dropna(subset=['link'], inplace=True)
-            external_links_df['link'] = external_links_df['link'].astype(str)
-            links_to_check = external_links_df.rename(columns={'url': 'source_url'})[['link', 'source_url']].to_dict('records')
-            logger.info(f"Found {len(external_links_df['link'].unique())} unique external links to check for audit_id: {audit_id}")
-        else:
-            logger.warning(f"No 'internal' column found in links data for audit_id {audit_id}. Skipping external link analysis.")
-    except Exception as e:
-        logger.error(f"Failed to extract external links for audit_id {audit_id}: {e}", exc_info=True)
+            task_logger.log("info", "Page-level analysis completed", {
+                "total_pages": len(page_level_report),
+                "pages_with_title": pages_with_title,
+                "pages_with_meta_desc": pages_with_meta_desc,
+                "pages_with_one_h1": pages_with_one_h1
+            })
 
-    # Calculate total internal link issues
-    total_internal_links_with_issues = (
-        len(internal_unreachable_links) + 
-        len(internal_broken_links) + 
-        len(internal_permission_issue_links) + 
-        len(internal_method_issue_links) + 
-        len(internal_other_client_errors)
-    )
+        except Exception as e:
+            error_msg = f"Failed to compile page-level report: {str(e)}"
+            task_logger.log("error", "Error compiling page report", {
+                "error": error_msg,
+                "exception_type": type(e).__name__
+            })
+            _mark_audit_failed(audit_id, error_msg)
+            raise
 
-    total_pages = len(page_level_report)
-    initial_report = {
-        "status": "ANALYZING_EXTERNAL",
-        "audit_id": audit_id,
-        "summary": {
-            "total_pages_analyzed": total_pages,
-            "internal_unreachable_links_found": len(internal_unreachable_links),
-            "internal_broken_links_found": len(internal_broken_links),
-            "internal_permission_issues_found": len(internal_permission_issue_links),
-            "internal_method_issues_found": len(internal_method_issue_links),
-            "internal_other_client_errors_found": len(internal_other_client_errors),
-            "pages_missing_title": total_pages - pages_with_title,
-            "pages_missing_meta_description": total_pages - pages_with_meta_desc,
-            "pages_with_correct_h1": pages_with_one_h1,
-            "pages_with_multiple_h1s": pages_with_multiple_h1s,
-            "pages_with_no_h1": pages_with_no_h1,
-            "top_10_title_words": _get_top_words(crawl_df['title']) if 'title' in crawl_df.columns else [],
-            "top_10_h1_words": _get_top_words(crawl_df['h1']) if 'h1' in crawl_df.columns else [],
-        },
-        "internal_unreachable_links": internal_unreachable_links,
-        "internal_broken_links": internal_broken_links,
-        "internal_permission_issue_links": internal_permission_issue_links,
-        "internal_method_issue_links": internal_method_issue_links,
-        "internal_other_client_errors": internal_other_client_errors,
-        "page_level_report": page_level_report
-    }
+        # Categorize internal links with same logic as external links
+        internal_unreachable_links = []
+        internal_broken_links = []
+        internal_permission_issue_links = []
+        internal_method_issue_links = []
+        internal_other_client_errors = []
 
-    try:
-        db = SessionLocal()
         try:
-            audit = db.query(Audit).filter(Audit.id == audit_id).first()
-            if audit:
-                audit.status = "ANALYZING_EXTERNAL"
-                audit.report_json = initial_report
-                db.commit()
-        finally:
-            db.close()
-        return {"crawl_output_file": crawl_output_file, "links_to_check": links_to_check}
-    except Exception as e:
-        error_msg = f"Failed to save report compilation: {str(e)}"
-        logger.error(f"Database error for audit_id {audit_id}: {error_msg}")
-        _mark_audit_failed(audit_id, error_msg)
-        raise
+            if 'status' in crawl_df.columns:
+                error_links_df = crawl_df[crawl_df['status'] >= 400].copy()
+                referer_col = 'request_headers_Referer'
+                if referer_col in error_links_df.columns:
+                    error_links_df.rename(columns={referer_col: 'source_url'}, inplace=True)
+                    error_links_df['source_url'] = error_links_df['source_url'].where(pd.notna(error_links_df['source_url']), 'Internal Navigation')
+                else:
+                    error_links_df['source_url'] = 'Internal Navigation'
+                
+                internal_false_positives_filtered = 0
+                
+                # Categorize internal links by status code (same logic as external links)
+                for _, row in error_links_df.iterrows():
+                    url = row.get('url', 'Unknown URL')
+                    status = row.get('status', -1)
+                    source_url = row.get('source_url', 'Internal Navigation')
+                    
+                    # Apply false positive filtering to internal links too
+                    is_false_pos, reason = is_likely_false_positive(url, status)
+                    if is_false_pos:
+                        internal_false_positives_filtered += 1
+                        task_logger.log("info", f"Filtered internal false positive: {url} ({status}) - {reason}")
+                        continue  # Skip this URL
+                    
+                    link_info = {
+                        'url': url,
+                        'status': status,
+                        'source_url': source_url
+                    }
+                    
+                    if status == -1:
+                        internal_unreachable_links.append(link_info)
+                    elif status in [404, 410]:
+                        internal_broken_links.append(link_info)
+                    elif status == 403:
+                        internal_permission_issue_links.append(link_info)
+                    elif status == 405:
+                        internal_method_issue_links.append(link_info)
+                    elif 400 <= status < 500:
+                        internal_other_client_errors.append(link_info)
+                
+                if internal_false_positives_filtered > 0:
+                    task_logger.log("info", f"Filtered {internal_false_positives_filtered} internal false positives")
+            else:
+                # Handle timeout/error cases where no status column exists
+                task_logger.log("warning", "No 'status' column found in crawl data. Checking for error records.")
+                # Look for timeout/error indicators in the data
+                for _, row in crawl_df.iterrows():
+                    url = row.get('url', 'Unknown URL')
+                    # Check for common error indicators
+                    if pd.isna(row.get('title')) and pd.isna(row.get('meta_desc')) and pd.isna(row.get('h1')):
+                        # This suggests a failed request (timeout, connection error, etc.)
+                        internal_unreachable_links.append({
+                            'url': url,
+                            'status': 'Unreachable',
+                            'source_url': 'Timeout/Error'
+                        })
+                if internal_unreachable_links:
+                    task_logger.log("info", f"Found {len(internal_unreachable_links)} unreachable internal links (likely timeouts)")
+        except Exception as e:
+            task_logger.log("error", f"Failed to process internal links: {e}")
+
+        task_logger.log("info", "Extracting external links for analysis")
+        links_to_check = []
+        try:
+            main_domain = urlparse(crawl_df['url'][0]).netloc
+            link_df = adv.crawlytics.links(crawl_df, internal_url_regex=main_domain)
+            
+            # Check if 'internal' column exists
+            if 'internal' in link_df.columns:
+                external_links_df = link_df[~link_df['internal']].copy()
+                external_links_df.dropna(subset=['link'], inplace=True)
+                external_links_df['link'] = external_links_df['link'].astype(str)
+                links_to_check = external_links_df.rename(columns={'url': 'source_url'})[['link', 'source_url']].to_dict('records')
+                task_logger.log("info", f"Found {len(external_links_df['link'].unique())} unique external links to check")
+            else:
+                task_logger.log("warning", "No 'internal' column found in links data. Skipping external link analysis.")
+        except Exception as e:
+            task_logger.log("error", f"Failed to extract external links: {e}", {
+                "exception_type": type(e).__name__
+            })
+
+        # Calculate total internal link issues
+        total_internal_links_with_issues = (
+            len(internal_unreachable_links) + 
+            len(internal_broken_links) + 
+            len(internal_permission_issue_links) + 
+            len(internal_method_issue_links) + 
+            len(internal_other_client_errors)
+        )
+
+        total_pages = len(page_level_report)
+        initial_report = {
+            "status": "ANALYZING_EXTERNAL",
+            "audit_id": audit_id,
+            "summary": {
+                "total_pages_analyzed": total_pages,
+                "internal_unreachable_links_found": len(internal_unreachable_links),
+                "internal_broken_links_found": len(internal_broken_links),
+                "internal_permission_issues_found": len(internal_permission_issue_links),
+                "internal_method_issues_found": len(internal_method_issue_links),
+                "internal_other_client_errors_found": len(internal_other_client_errors),
+                "pages_missing_title": total_pages - pages_with_title,
+                "pages_missing_meta_description": total_pages - pages_with_meta_desc,
+                "pages_with_correct_h1": pages_with_one_h1,
+                "pages_with_multiple_h1s": pages_with_multiple_h1s,
+                "pages_with_no_h1": pages_with_no_h1,
+                "top_10_title_words": _get_top_words(crawl_df['title']) if 'title' in crawl_df.columns else [],
+                "top_10_h1_words": _get_top_words(crawl_df['h1']) if 'h1' in crawl_df.columns else [],
+            },
+            "internal_unreachable_links": internal_unreachable_links,
+            "internal_broken_links": internal_broken_links,
+            "internal_permission_issue_links": internal_permission_issue_links,
+            "internal_method_issue_links": internal_method_issue_links,
+            "internal_other_client_errors": internal_other_client_errors,
+            "page_level_report": page_level_report
+        }
+
+        task_logger.log("info", "Saving initial report to database", {
+            "total_pages": total_pages,
+            "external_links_to_check": len(links_to_check)
+        })
+        
+        try:
+            db = SessionLocal()
+            try:
+                audit = db.query(Audit).filter(Audit.id == audit_id).first()
+                if audit:
+                    audit.status = "ANALYZING_EXTERNAL"
+                    audit.report_json = initial_report
+                    db.commit()
+                    task_logger.log("info", "Initial report saved successfully")
+            finally:
+                db.close()
+            return {"crawl_output_file": crawl_output_file, "links_to_check": links_to_check}
+        except Exception as e:
+            error_msg = f"Failed to save report compilation: {str(e)}"
+            task_logger.log("error", "Database error during report save", {
+                "error": error_msg,
+                "exception_type": type(e).__name__
+            })
+            _mark_audit_failed(audit_id, error_msg)
+            raise
 
 @celery_app.task(bind=True)
 def check_external_links(self, previous_task_output: dict, audit_id: int) -> dict:
@@ -372,124 +443,167 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
     Check external links using async chunked processing.
     This version prevents blocking and handles domain collisions intelligently.
     """
-    links_to_check = previous_task_output.get('links_to_check', [])
-    crawl_output_file = previous_task_output.get('crawl_output_file')
+    task_context = {
+        "task_id": self.request.id,
+        "previous_output_keys": list(previous_task_output.keys())
+    }
     
-    if not links_to_check:
-        logger.info(f"No external links to check for audit_id: {audit_id}. Skipping.")
-        return {"crawl_output_file": crawl_output_file, "external_links_report": {}}
+    with TaskLogger(audit_id=audit_id, task_name="check_external_links", 
+                   task_id=self.request.id, context=task_context) as task_logger:
+        
+        links_to_check = previous_task_output.get('links_to_check', [])
+        crawl_output_file = previous_task_output.get('crawl_output_file')
+        
+        if not links_to_check:
+            task_logger.log("info", "No external links to check. Skipping.")
+            return {"crawl_output_file": crawl_output_file, "external_links_report": {}}
 
-    # Create URL to source mapping for preserving source URLs
-    links_df = pd.DataFrame(links_to_check)
-    url_to_source_mapping = {}
-    
-    for _, row in links_df.iterrows():
-        url = row['link']
-        source = row['source_url']
-        if url not in url_to_source_mapping:
-            url_to_source_mapping[url] = source
-        # If URL appears multiple times, keep the first source for simplicity
-    
-    unique_urls_to_check = list(url_to_source_mapping.keys())
-    
-    logger.info(f"Starting async external link checking for {len(unique_urls_to_check)} unique URLs (audit_id: {audit_id})")
-    
-    try:
-        # Run the async function in the current thread
-        # Since this is a Celery task, we need to create a new event loop
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        task_logger.log("info", f"Processing {len(links_to_check)} external links")
+        
+        # Create URL to source mapping for preserving source URLs
+        links_df = pd.DataFrame(links_to_check)
+        url_to_source_mapping = {}
+        
+        for _, row in links_df.iterrows():
+            url = row['link']
+            source = row['source_url']
+            if url not in url_to_source_mapping:
+                url_to_source_mapping[url] = source
+            # If URL appears multiple times, keep the first source for simplicity
+        
+        unique_urls_to_check = list(url_to_source_mapping.keys())
+        
+        task_logger.log("info", f"Starting async external link checking", {
+            "unique_urls": len(unique_urls_to_check),
+            "total_links": len(links_to_check)
+        })
         
         try:
-            external_links_report = loop.run_until_complete(
-                check_external_links_async(unique_urls_to_check, audit_id, url_to_source_mapping)
-            )
-        finally:
-            loop.close()
+            # Run the async function in the current thread
+            # Since this is a Celery task, we need to create a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                external_links_report = loop.run_until_complete(
+                    check_external_links_async(unique_urls_to_check, audit_id, url_to_source_mapping)
+                )
+            finally:
+                loop.close()
+            
+            task_logger.log("info", "Async external link checking completed", {
+                "broken_links": len(external_links_report.get('broken_links', [])),
+                "unreachable_links": len(external_links_report.get('unreachable_links', [])),
+                "permission_issues": len(external_links_report.get('permission_issues', []))
+            })
+            
+        except Exception as e:
+            task_logger.log("error", "Failed to check external links", {
+                "error": str(e),
+                "exception_type": type(e).__name__
+            })
+            external_links_report = {
+                "unreachable_links": [],
+                "broken_links": [],
+                "permission_issues": [],
+                "method_issues": [],
+                "other_client_errors": [],
+                "error": str(e)
+            }
         
-        logger.info(f"Async external link checking completed for audit_id: {audit_id}")
-        
-    except Exception as e:
-        logger.error(f"Failed to check external links for audit_id {audit_id}: {e}", exc_info=True)
-        external_links_report = {
-            "unreachable_links": [],
-            "broken_links": [],
-            "permission_issues": [],
-            "method_issues": [],
-            "other_client_errors": [],
-            "error": str(e)
-        }
-    
-    return {"crawl_output_file": crawl_output_file, "external_links_report": external_links_report}
+        return {"crawl_output_file": crawl_output_file, "external_links_report": external_links_report}
 
 @celery_app.task(bind=True)
 def save_final_report(self, previous_task_output: dict, audit_id: int):
-    logger.info(f"Saving final report for audit_id: {audit_id}")
-    external_links_report = previous_task_output.get('external_links_report', {})
-    crawl_output_file = previous_task_output.get('crawl_output_file')
-    unreachable_links = external_links_report.get('unreachable_links', [])
-    broken_links = external_links_report.get('broken_links', [])
-    permission_issues = external_links_report.get('permission_issues', [])
-    method_issues = external_links_report.get('method_issues', [])
-    other_client_errors = external_links_report.get('other_client_errors', [])
-
-    db = SessionLocal()
-    try:
-        audit = db.query(Audit).filter(Audit.id == audit_id).first()
-        if not audit:
-            logger.error(f"Audit with ID {audit_id} not found for final save.")
-            return
-
-        report_json = audit.report_json.copy()
-        summary = report_json["summary"]
-        summary.update({
-            "external_unreachable_links_found": len(unreachable_links),
-            "external_broken_links_found": len(broken_links),
-            "external_permission_issues_found": len(permission_issues),
-            "external_method_issues_found": len(method_issues),
-            "external_other_client_errors_found": len(other_client_errors)
+    task_context = {
+        "task_id": self.request.id,
+        "previous_output_keys": list(previous_task_output.keys())
+    }
+    
+    with TaskLogger(audit_id=audit_id, task_name="save_final_report", 
+                   task_id=self.request.id, context=task_context) as task_logger:
+        
+        external_links_report = previous_task_output.get('external_links_report', {})
+        crawl_output_file = previous_task_output.get('crawl_output_file')
+        unreachable_links = external_links_report.get('unreachable_links', [])
+        broken_links = external_links_report.get('broken_links', [])
+        permission_issues = external_links_report.get('permission_issues', [])
+        method_issues = external_links_report.get('method_issues', [])
+        other_client_errors = external_links_report.get('other_client_errors', [])
+        
+        task_logger.log("info", "Starting final report save", {
+            "external_broken_links": len(broken_links),
+            "external_unreachable_links": len(unreachable_links),
+            "external_permission_issues": len(permission_issues)
         })
-        
-        # This is the final JSON object that will be stored in the database.
-        # It should NOT contain redundant top-level keys like status or audit_id,
-        # as those are separate columns in the 'audits' table.
-        final_report_blob = {
-            "summary": summary,
-            "external_unreachable_links": unreachable_links,
-            "external_broken_links": broken_links,
-            "external_permission_issue_links": permission_issues,
-            "external_method_issue_links": method_issues,
-            "external_other_client_errors": other_client_errors,
-            "internal_unreachable_links": report_json["internal_unreachable_links"],
-            "internal_broken_links": report_json["internal_broken_links"],
-            "internal_permission_issue_links": report_json["internal_permission_issue_links"],
-            "internal_method_issue_links": report_json["internal_method_issue_links"],
-            "internal_other_client_errors": report_json["internal_other_client_errors"],
-            "page_level_report": report_json["page_level_report"]
-        }
-        
-        audit.report_json = final_report_blob
-        audit.status = "COMPLETE"
-        audit.completed_at = datetime.datetime.utcnow()
-        db.commit()
-        logger.info(f"Successfully saved final report for audit_id: {audit_id}")
 
-        if settings.DASHBOARD_CALLBACK_URL:
-            logger.info(f"Dashboard callback URL is set, queueing callback task for audit_id: {audit_id}")
-            send_report_to_dashboard.delay(audit_id=audit_id)
-        else:
-            logger.info(f"No dashboard callback URL configured. Skipping callback for audit_id: {audit_id}")
-    except Exception as e:
-        logger.error(f"Failed to save final report for audit_id {audit_id}: {e}", exc_info=True)
-        if audit:
-            audit.status = "ERROR"
+        db = SessionLocal()
+        try:
+            audit = db.query(Audit).filter(Audit.id == audit_id).first()
+            if not audit:
+                task_logger.log("error", "Audit not found for final save")
+                return
+
+            task_logger.log("info", "Building final report structure")
+            report_json = audit.report_json.copy()
+            summary = report_json["summary"]
+            summary.update({
+                "external_unreachable_links_found": len(unreachable_links),
+                "external_broken_links_found": len(broken_links),
+                "external_permission_issues_found": len(permission_issues),
+                "external_method_issues_found": len(method_issues),
+                "external_other_client_errors_found": len(other_client_errors)
+            })
+            
+            # This is the final JSON object that will be stored in the database.
+            # It should NOT contain redundant top-level keys like status or audit_id,
+            # as those are separate columns in the 'audits' table.
+            final_report_blob = {
+                "summary": summary,
+                "external_unreachable_links": unreachable_links,
+                "external_broken_links": broken_links,
+                "external_permission_issue_links": permission_issues,
+                "external_method_issue_links": method_issues,
+                "external_other_client_errors": other_client_errors,
+                "internal_unreachable_links": report_json["internal_unreachable_links"],
+                "internal_broken_links": report_json["internal_broken_links"],
+                "internal_permission_issue_links": report_json["internal_permission_issue_links"],
+                "internal_method_issue_links": report_json["internal_method_issue_links"],
+                "internal_other_client_errors": report_json["internal_other_client_errors"],
+                "page_level_report": report_json["page_level_report"]
+            }
+            
+            audit.report_json = final_report_blob
+            audit.status = "COMPLETE"
+            audit.completed_at = datetime.datetime.utcnow()
             db.commit()
-    finally:
-        db.close()
+            task_logger.log("info", "Successfully saved final report")
 
-    if crawl_output_file and os.path.exists(crawl_output_file):
-        try: os.remove(crawl_output_file)
-        except OSError as e: logger.warning(f"Error cleaning up main crawl file {crawl_output_file}: {e}")
+            if settings.DASHBOARD_CALLBACK_URL:
+                task_logger.log("info", "Dashboard callback URL configured, queueing callback task")
+                send_report_to_dashboard.delay(audit_id=audit_id)
+            else:
+                task_logger.log("info", "No dashboard callback URL configured")
+        except Exception as e:
+            task_logger.log("error", "Failed to save final report", {
+                "error": str(e),
+                "exception_type": type(e).__name__
+            })
+            if audit:
+                audit.status = "ERROR"
+                db.commit()
+        finally:
+            db.close()
+
+        # Cleanup crawl output file
+        if crawl_output_file and os.path.exists(crawl_output_file):
+            try: 
+                os.remove(crawl_output_file)
+                task_logger.log("info", "Cleaned up crawl output file", {
+                    "file": crawl_output_file
+                })
+            except OSError as e: 
+                task_logger.log("warning", f"Error cleaning up crawl file: {e}")
 
 @celery_app.task(bind=True)
 def send_report_to_dashboard(self, audit_id: int):
@@ -497,60 +611,82 @@ def send_report_to_dashboard(self, audit_id: int):
     Sends the final report to the pre-configured dashboard callback URL.
     This task will retry if the dashboard is unavailable.
     """
-    db = SessionLocal()
-    try:
-        audit = db.query(Audit).filter(Audit.id == audit_id).first()
-        if not audit:
-            logger.error(f"Audit with ID {audit_id} not found for sending report.")
-            return
-
-        if not settings.DASHBOARD_CALLBACK_URL or not settings.DASHBOARD_API_KEY:
-            logger.warning("DASHBOARD_CALLBACK_URL or DASHBOARD_API_KEY not set. Skipping callback.")
-            return
+    task_context = {
+        "task_id": self.request.id,
+        "dashboard_url": settings.DASHBOARD_CALLBACK_URL
+    }
+    
+    with TaskLogger(audit_id=audit_id, task_name="send_report_to_dashboard", 
+                   task_id=self.request.id, context=task_context) as task_logger:
         
-        # The data in audit.report_json is now clean. We construct the payload
-        # using the direct attributes from the model for clarity and consistency.
-        # Order matches the API response exactly for consistency
-        callback_payload = {
-            "audit_id": audit.id,
-            "status": audit.status,
-            "url": audit.url,
-            "user_id": audit.user_id,
-            "user_audit_report_request_id": audit.user_audit_report_request_id,
-            "created_at": audit.created_at.isoformat(),
-            "completed_at": audit.completed_at.isoformat() if audit.completed_at else None,
-            "error_message": audit.error_message,
-            "technical_error": audit.technical_error,
-            "report_json": audit.report_json
-        }
+        task_logger.log("info", "Starting dashboard callback")
+        
+        db = SessionLocal()
+        try:
+            audit = db.query(Audit).filter(Audit.id == audit_id).first()
+            if not audit:
+                task_logger.log("error", "Audit not found for dashboard callback")
+                return
 
-        headers = {
-            "Content-Type": "application/json",
-            "X-API-KEY": settings.DASHBOARD_API_KEY
-        }
+            if not settings.DASHBOARD_CALLBACK_URL or not settings.DASHBOARD_API_KEY:
+                task_logger.log("warning", "Dashboard callback URL or API key not configured")
+                return
+            
+            # The data in audit.report_json is now clean. We construct the payload
+            # using the direct attributes from the model for clarity and consistency.
+            # Order matches the API response exactly for consistency
+            callback_payload = {
+                "audit_id": audit.id,
+                "status": audit.status,
+                "url": audit.url,
+                "user_id": audit.user_id,
+                "user_audit_report_request_id": audit.user_audit_report_request_id,
+                "created_at": audit.created_at.isoformat(),
+                "completed_at": audit.completed_at.isoformat() if audit.completed_at else None,
+                "error_message": audit.error_message,
+                "technical_error": audit.technical_error,
+                "report_json": audit.report_json
+            }
 
-        logger.info(f"Sending final report for audit_id: {audit_id} to {settings.DASHBOARD_CALLBACK_URL}")
+            headers = {
+                "Content-Type": "application/json",
+                "X-API-KEY": settings.DASHBOARD_API_KEY
+            }
 
-        with httpx.Client() as client:
-            response = client.post(
-                settings.DASHBOARD_CALLBACK_URL,
-                json=callback_payload,
-                headers=headers,
-                timeout=30.0 
-            )
-            response.raise_for_status()
-            logger.info(f"Successfully sent report for audit_id: {audit_id}. Dashboard responded with {response.status_code}.")
+            task_logger.log("info", "Sending report to dashboard", {
+                "dashboard_url": settings.DASHBOARD_CALLBACK_URL,
+                "audit_status": audit.status
+            })
 
-    except httpx.RequestError as exc:
-        logger.error(f"Request to dashboard failed for audit {audit_id}: {exc}. Retrying in 60 seconds.")
-        # Exponential backoff, retry in 60s, 120s, 240s, etc. max 5 times.
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries), max_retries=5)
-    except Exception as e:
-        logger.error(f"An unexpected error occurred while sending report for audit {audit_id}: {e}", exc_info=True)
-        # For non-HTTP errors, you might not want to retry, or use a different strategy.
-        # Here we will not retry for unexpected errors to avoid poison pills.
-    finally:
-        db.close()
+            with httpx.Client() as client:
+                response = client.post(
+                    settings.DASHBOARD_CALLBACK_URL,
+                    json=callback_payload,
+                    headers=headers,
+                    timeout=30.0 
+                )
+                response.raise_for_status()
+                task_logger.log("info", "Successfully sent report to dashboard", {
+                    "response_status": response.status_code
+                })
+
+        except httpx.RequestError as exc:
+            task_logger.log("error", "Request to dashboard failed. Retrying.", {
+                "error": str(exc),
+                "retry_count": self.request.retries,
+                "next_retry_in_seconds": 60 * (2 ** self.request.retries)
+            })
+            # Exponential backoff, retry in 60s, 120s, 240s, etc. max 5 times.
+            raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries), max_retries=5)
+        except Exception as e:
+            task_logger.log("error", "Unexpected error sending report to dashboard", {
+                "error": str(e),
+                "exception_type": type(e).__name__
+            })
+            # For non-HTTP errors, you might not want to retry, or use a different strategy.
+            # Here we will not retry for unexpected errors to avoid poison pills.
+        finally:
+            db.close()
 
 @celery_app.task
 def run_full_audit(audit_id: int, url: str, max_pages: int = 100):
@@ -678,7 +814,7 @@ def get_domain_safe_settings(urls: list) -> dict:
 
     # If we have auth-required domains, use more gentle settings
     if auth_domains_found:
-        logger.info(f"Detected authentication-sensitive domains: {len(auth_domains_found)} domains, using gentle settings")
+        logging_manager.log_system_event("crawler", "info", f"Detected authentication-sensitive domains: {len(auth_domains_found)} domains, using gentle settings")
         return {
             'ROBOTSTXT_OBEY': False,
             'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
@@ -747,7 +883,7 @@ def run_advertools_chunk(urls: list, output_file: str) -> dict:
         }
         
     except Exception as e:
-        logger.error(f"Error processing chunk {output_file}: {e}")
+        logging_manager.log_system_event("crawler", "error", f"Error processing chunk {output_file}: {e}")
         return {
             "success": False, 
             "error": str(e), 
@@ -942,7 +1078,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     This prevents blocking and handles domain collisions intelligently.
     """
     if not urls:
-        logger.info(f"No external links to check for audit_id: {audit_id}")
+        logging_manager.log_audit_event(audit_id, "info", "No external links to check")
         return {
             "unreachable_links": [],
             "broken_links": [],
@@ -954,12 +1090,12 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     # Limit total URLs to prevent excessive processing
     MAX_EXTERNAL_LINKS = 100
     if len(urls) > MAX_EXTERNAL_LINKS:
-        logger.warning(f"Too many external links ({len(urls)}) for audit_id: {audit_id}. Limiting to {MAX_EXTERNAL_LINKS}")
+        logging_manager.log_audit_event(audit_id, "warning", f"Too many external links ({len(urls)}). Limiting to {MAX_EXTERNAL_LINKS}")
         urls = urls[:MAX_EXTERNAL_LINKS]
     
     # Create domain-aware chunks
     chunks = chunk_urls_by_domain(urls, max_chunk_size=20)
-    logger.info(f"Processing {len(urls)} external links in {len(chunks)} chunks for audit_id: {audit_id}")
+    logging_manager.log_audit_event(audit_id, "info", f"Processing {len(urls)} external links in {len(chunks)} chunks")
     
     # Prepare output files for each chunk
     os.makedirs('results', exist_ok=True)
@@ -971,7 +1107,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     async def process_chunk_async(chunk_urls: list, output_file: str, chunk_id: int):
         """Process a single chunk asynchronously."""
         async with semaphore:
-            logger.info(f"Processing chunk {chunk_id} with {len(chunk_urls)} URLs for audit_id: {audit_id}")
+            logging_manager.log_audit_event(audit_id, "info", f"Processing chunk {chunk_id} with {len(chunk_urls)} URLs")
             
             loop = asyncio.get_event_loop()
             
@@ -985,7 +1121,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                     )
                     return result
                 except asyncio.TimeoutError:
-                    logger.error(f"Chunk {chunk_id} timed out for audit_id: {audit_id}")
+                    logging_manager.log_audit_event(audit_id, "error", f"Chunk {chunk_id} timed out")
                     return {
                         "success": False,
                         "error": "Timeout",
@@ -993,7 +1129,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                         "output_file": output_file
                     }
                 except Exception as e:
-                    logger.error(f"Error processing chunk {chunk_id} for audit_id: {audit_id}: {e}")
+                    logging_manager.log_audit_event(audit_id, "error", f"Error processing chunk {chunk_id}: {e}")
                     return {
                         "success": False,
                         "error": str(e),
@@ -1015,11 +1151,11 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
             timeout=600  # 10 minutes total
         )
     except asyncio.TimeoutError:
-        logger.error(f"Overall external link checking timed out for audit_id: {audit_id}")
+        logging_manager.log_audit_event(audit_id, "error", "Overall external link checking timed out")
         chunk_results = [{"success": False, "error": "Overall timeout", "output_file": f} for f in chunk_files]
     
     elapsed_time = time.time() - start_time
-    logger.info(f"External link checking completed for audit_id: {audit_id} in {elapsed_time:.2f} seconds")
+    logging_manager.log_audit_event(audit_id, "info", f"External link checking completed in {elapsed_time:.2f} seconds")
     
     # Merge results from all chunks
     external_links_report = {
@@ -1036,11 +1172,11 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     
     for i, result in enumerate(chunk_results):
         if isinstance(result, Exception):
-            logger.error(f"Chunk {i} failed with exception: {result}")
+            logging_manager.log_audit_event(audit_id, "error", f"Chunk {i} failed with exception: {result}")
             continue
             
         if not result.get("success", False):
-            logger.warning(f"Chunk {i} failed: {result.get('error', 'Unknown error')}")
+            logging_manager.log_audit_event(audit_id, "warning", f"Chunk {i} failed: {result.get('error', 'Unknown error')}")
             continue
         
         successful_chunks += 1
@@ -1064,7 +1200,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                         is_false_pos, reason = is_likely_false_positive(url, status)
                         if is_false_pos:
                             false_positives_filtered += 1
-                            logger.info(f"Filtered false positive: {url} (404) - {reason}")
+                            logging_manager.log_audit_event(audit_id, "info", f"Filtered false positive: {url} ({status}) - {reason}")
                             continue  # Skip this URL
                         
                         # Use actual source URL from mapping, fallback to 'External Link Check'
@@ -1090,7 +1226,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                             external_links_report["other_client_errors"].append(link_info)
                 
             except Exception as e:
-                logger.error(f"Error processing results from {chunk_file}: {e}")
+                logging_manager.log_audit_event(audit_id, "error", f"Error processing results from {chunk_file}: {e}")
             finally:
                 # Clean up chunk file
                 try:
@@ -1098,7 +1234,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                 except OSError:
                     pass
     
-    logger.info(f"External link summary for audit_id {audit_id}: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed, {false_positives_filtered} false positives filtered")
+    logging_manager.log_audit_event(audit_id, "info", f"External link summary: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed, {false_positives_filtered} false positives filtered")
     
     return external_links_report
 
