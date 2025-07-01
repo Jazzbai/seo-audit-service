@@ -249,7 +249,7 @@ def is_valid_url(url: str) -> Tuple[bool, Optional[str]]:
 
 def check_domain_exists(url: str) -> Tuple[bool, Optional[str]]:
     """
-    Check if domain exists via DNS lookup.
+    Check if domain exists via DNS lookup with proper timeout handling.
 
     Returns:
         Tuple of (exists, error_message)
@@ -258,16 +258,27 @@ def check_domain_exists(url: str) -> Tuple[bool, Optional[str]]:
         parsed = urlparse(url)
         hostname = parsed.netloc.split(":")[0]  # Remove port if present
 
-        # Try DNS resolution
+        # Create resolver with explicit timeout settings
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 15  # 15 second timeout for each DNS server
+        resolver.lifetime = 30  # 30 second total timeout
+
+        # Try DNS resolution with custom timeout
         try:
-            dns.resolver.resolve(hostname, "A")
+            resolver.resolve(hostname, "A")
             return True, None
         except dns.resolver.NXDOMAIN:
             return False, f"Domain '{hostname}' does not exist"
         except dns.resolver.NoAnswer:
             return False, f"Domain '{hostname}' has no IP address"
         except dns.resolver.Timeout:
-            return False, f"DNS lookup timeout for '{hostname}'"
+            logger.warning(f"DNS timeout for {hostname}, trying socket fallback")
+            # Fall back to socket-based check
+            try:
+                socket.gethostbyname(hostname)
+                return True, None
+            except socket.gaierror:
+                return False, f"DNS lookup timeout for '{hostname}'"
         except Exception as dns_e:
             logger.warning(f"DNS lookup failed for {hostname}: {dns_e}")
             # Fall back to socket-based check
