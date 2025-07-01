@@ -469,20 +469,60 @@ grep "audit_id.*42" logs/workers/*.log
 - `404`: Audit not found
 - `422`: Invalid request parameters
 
-## Development & Maintenance
+## Contributing
 
-This is a proprietary SEO audit system currently in active development and maintenance. 
+We welcome contributions to the SEO Audit Agent! This project is open source and we encourage community involvement.
 
-### **Current Status**
-- **Status**: Private/Proprietary Software
-- **Development**: Active maintenance and feature development ongoing
-- **Usage**: Internal use and licensed deployments
+### **How to Contribute**
 
-### **Feature Requests & Issues**
-For feature requests, bug reports, or technical support:
-- Contact the development team directly
-- Document issues with detailed reproduction steps
-- Include relevant log files from the `logs/` directory
+1. **Fork the Repository**
+   ```bash
+   git clone https://github.com/yourusername/seo-audit.git
+   cd seo-audit
+   ```
+
+2. **Create a Feature Branch**
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+3. **Make Your Changes**
+   - Follow the existing code style and patterns
+   - Add tests for new functionality
+   - Update documentation as needed
+   - Ensure all tests pass
+
+4. **Commit Your Changes**
+   ```bash
+   git commit -m "feat: add your feature description"
+   ```
+   Follow conventional commit format (feat/fix/docs/refactor/test)
+
+5. **Submit a Pull Request**
+   - Provide a clear description of the changes
+   - Include any relevant issue numbers
+   - Ensure CI/CD checks pass
+
+### **Development Guidelines**
+
+- **Code Style**: Follow PEP 8 for Python code
+- **Testing**: Add tests for new features and bug fixes
+- **Documentation**: Update README and docstrings for any API changes
+- **Logging**: Use the structured logging system for new features
+- **Error Handling**: Follow the existing error classification patterns
+
+### **Issues and Feature Requests**
+- 🐛 **Bug Reports**: Use the bug report template
+- 💡 **Feature Requests**: Use the feature request template  
+- 📖 **Documentation**: Help improve our documentation
+- 🔧 **Performance**: Optimize existing functionality
+
+### **Development Setup**
+Follow the "Manual Local Setup" section above for development environment setup.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Support
 
@@ -490,7 +530,15 @@ For issues and questions:
 1. Check the troubleshooting section above
 2. Review the logs for detailed error information
 3. Use the recovery tools for stuck audits
-4. Create an issue in the repository
+4. **Create an issue** on GitHub for bugs or feature requests
+5. **Join the discussion** in GitHub Discussions for questions
+
+## Acknowledgments
+
+- Built with [advertools](https://github.com/eliasdabbas/advertools) for web crawling
+- Uses [FastAPI](https://fastapi.tiangolo.com/) for the REST API
+- Powered by [Celery](https://docs.celeryproject.org/) for async task processing
+- Thanks to all contributors who help improve this project
 
 ---
 
