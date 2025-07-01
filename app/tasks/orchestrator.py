@@ -863,8 +863,8 @@ def get_domain_safe_settings(urls: list) -> dict:
 
 def run_advertools_chunk(urls: list, output_file: str) -> dict:
     """
-    Run advertools crawl_headers on a chunk of URLs.
-    This function runs in a separate thread.
+    Run smart URL checking with HEAD→GET fallback for 4xx errors.
+    This matches Google's crawling behavior and eliminates false positives.
     """
     try:
         if not urls:
@@ -873,12 +873,60 @@ def run_advertools_chunk(urls: list, output_file: str) -> dict:
         # Get domain-optimized settings
         custom_settings = get_domain_safe_settings(urls)
         
-        # Run advertools crawl_headers
-        adv.crawl_headers(urls, output_file, custom_settings=custom_settings)
+        # First try advertools crawl_headers (HEAD requests)
+        # Create temp filename that ends with .jl as required by advertools
+        temp_head_file = output_file.replace('.jl', '.head_temp.jl')
+        adv.crawl_headers(urls, temp_head_file, custom_settings=custom_settings)
+        
+        # Process HEAD results and identify 4xx errors for GET fallback
+        fallback_urls = []
+        final_results = []
+        
+        # Read HEAD results
+        if os.path.exists(temp_head_file):
+            head_df = pd.read_json(temp_head_file, lines=True)
+            
+            for _, row in head_df.iterrows():
+                status = row.get('status', -1)
+                url = row.get('url', '')
+                
+                # If 4xx error OR unreachable (-1), mark for GET fallback
+                if 400 <= status < 500 or status == -1:
+                    fallback_urls.append(url)
+                else:
+                    # Keep non-4xx/non-unreachable results as-is
+                    final_results.append(row.to_dict())
+            
+            # Clean up temporary file
+            os.remove(temp_head_file)
+        
+        # Perform GET fallback for 4xx errors
+        if fallback_urls:
+            get_results = run_get_fallback_check(fallback_urls, custom_settings)
+            final_results.extend(get_results)
+        
+        # Write final results to output file
+        if final_results:
+            final_df = pd.DataFrame(final_results)
+            final_df.to_json(output_file, orient='records', lines=True)
+        else:
+            # Create empty file if no results
+            with open(output_file, 'w') as f:
+                pass
+        
+        # Cleanup temp files
+        temp_get_file = temp_head_file.replace('.head_temp.jl', '.get_temp.jl') if fallback_urls else None
+        for temp_file in [temp_head_file, temp_get_file]:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except OSError:
+                    pass  # Ignore cleanup failures
         
         return {
             "success": True, 
-            "urls_processed": len(urls), 
+            "urls_processed": len(urls),
+            "fallback_used": len(fallback_urls),
             "output_file": output_file
         }
         
@@ -888,8 +936,93 @@ def run_advertools_chunk(urls: list, output_file: str) -> dict:
             "success": False, 
             "error": str(e), 
             "urls_processed": 0,
+            "fallback_used": 0,
             "output_file": output_file
         }
+
+def run_get_fallback_check(urls: list, custom_settings: dict) -> list:
+    """
+    Perform GET requests for URLs that returned 4xx with HEAD or were unreachable.
+    This matches Google's behavior and eliminates false positives.
+    """
+    results = []
+    
+    # Use httpx for GET requests with same settings as advertools
+    timeout = custom_settings.get('DOWNLOAD_TIMEOUT', 30)
+    user_agent = custom_settings.get('USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    delay = custom_settings.get('DOWNLOAD_DELAY', 1)
+    
+    headers = {
+        'User-Agent': user_agent,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br, zstd',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0'
+    }
+    
+    with httpx.Client(headers=headers, timeout=timeout, follow_redirects=True) as client:
+        for url in urls:
+            try:
+                # Add delay between requests
+                if delay > 0:
+                    time.sleep(delay)
+                
+                # Perform GET request
+                response = client.get(url)
+                
+                result = {
+                    'url': url,
+                    'status': response.status_code,
+                    'method_used': 'GET_FALLBACK',  # Mark as fallback
+                    'content_type': response.headers.get('content-type', ''),
+                    'size': len(response.content) if response.content else 0,
+                    'redirect_url': str(response.url) if response.url != url else None,
+                    'fallback_reason': 'HEAD_failed'  # Track why fallback was used
+                }
+                
+                results.append(result)
+                
+            except httpx.TimeoutException:
+                results.append({
+                    'url': url,
+                    'status': -1,  # Still timeout with GET
+                    'method_used': 'GET_FALLBACK_TIMEOUT',
+                    'error': 'Timeout',
+                    'fallback_reason': 'HEAD_failed_GET_timeout'
+                })
+            except httpx.ConnectError as e:
+                results.append({
+                    'url': url,
+                    'status': -1,  # Still connection error with GET
+                    'method_used': 'GET_FALLBACK_CONNECTION_ERROR',
+                    'error': f'Connection error: {str(e)}',
+                    'fallback_reason': 'HEAD_failed_GET_connection_error'
+                })
+            except httpx.RequestError as e:
+                results.append({
+                    'url': url,
+                    'status': -1,  # Still request error with GET
+                    'method_used': 'GET_FALLBACK_REQUEST_ERROR',
+                    'error': f'Request error: {str(e)}',
+                    'fallback_reason': 'HEAD_failed_GET_request_error'
+                })
+            except Exception as e:
+                results.append({
+                    'url': url,
+                    'status': -1,  # Unknown error with GET
+                    'method_used': 'GET_FALLBACK_ERROR',
+                    'error': f'Unknown error: {str(e)}',
+                    'fallback_reason': 'HEAD_failed_GET_unknown_error'
+                })
+    
+    return results
 
 def is_likely_false_positive(url: str, status: int) -> tuple[bool, str]:
     """
@@ -898,6 +1031,10 @@ def is_likely_false_positive(url: str, status: int) -> tuple[bool, str]:
     
     Returns (is_false_positive, reason)
     """
+    # Never filter unreachable links (-1) as false positives - these are real connectivity issues
+    if status == -1:
+        return False, "Unreachable links are never false positives"
+    
     # Only apply false positive filtering to 4xx client errors
     if status < 400 or status >= 500:
         return False, ""
@@ -1168,6 +1305,8 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
     
     successful_chunks = 0
     total_urls_processed = 0
+    total_fallbacks_used = 0
+    unreachable_recoveries = 0  # Track successful recoveries from unreachable status
     false_positives_filtered = 0
     
     for i, result in enumerate(chunk_results):
@@ -1181,6 +1320,7 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
         
         successful_chunks += 1
         total_urls_processed += result.get("urls_processed", 0)
+        total_fallbacks_used += result.get("fallback_used", 0)
         
         # Process the chunk results
         chunk_file = result.get("output_file")
@@ -1190,11 +1330,28 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                 
                 if not headers_df.empty and 'status' in headers_df.columns:
                     headers_df['status'] = headers_df['status'].fillna(-1).astype(int)
+                    
+                    # Track successful recoveries (GET fallback succeeded where HEAD failed)
+                    if 'method_used' in headers_df.columns:
+                        fallback_successes = headers_df[
+                            (headers_df['method_used'].str.contains('GET_FALLBACK', na=False)) &
+                            (headers_df['status'].between(200, 399))
+                        ]
+                    else:
+                        fallback_successes = pd.DataFrame()  # Empty DataFrame if column doesn't exist
+                    if not fallback_successes.empty:
+                        unreachable_recoveries += len(fallback_successes)
+                        for _, row in fallback_successes.iterrows():
+                            url = row.get('url', 'Unknown')
+                            status = row.get('status', 'Unknown')
+                            logging_manager.log_audit_event(audit_id, "info", f"Recovery success: HEAD failed but GET returned {status} for {url}")
+                    
                     error_headers = headers_df[~headers_df['status'].between(200, 399)]
                     
                     for _, row in error_headers.iterrows():
                         status = row['status']
                         url = row.get('url', 'Unknown')
+                        method_used = row.get('method_used', 'HEAD_ONLY')
                         
                         # Check for false positives before categorizing
                         is_false_pos, reason = is_likely_false_positive(url, status)
@@ -1211,7 +1368,8 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                         link_info = {
                             'url': url,
                             'status': 'Unreachable' if status == -1 else status,
-                            'source_url': source_url
+                            'source_url': source_url,
+                            'method_used': method_used  # Track which method was used
                         }
                         
                         if status == -1:
@@ -1234,7 +1392,15 @@ async def check_external_links_async(urls: list, audit_id: int, url_to_source_ma
                 except OSError:
                     pass
     
-    logging_manager.log_audit_event(audit_id, "info", f"External link summary: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed, {false_positives_filtered} false positives filtered")
+    # Enhanced summary with fallback and recovery statistics
+    summary_msg = f"External link summary: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed"
+    if total_fallbacks_used > 0:
+        summary_msg += f", {total_fallbacks_used} GET fallbacks used"
+    if unreachable_recoveries > 0:
+        summary_msg += f", {unreachable_recoveries} URLs recovered from unreachable status"
+    summary_msg += f", {false_positives_filtered} false positives filtered"
+    
+    logging_manager.log_audit_event(audit_id, "info", summary_msg)
     
     return external_links_report
 
