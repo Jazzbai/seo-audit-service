@@ -2,18 +2,18 @@ import os
 import sys
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
 # Add the project's root directory to the Python path.
 # This ensures that the 'app' module can be imported by Alembic.
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # this is the Alembic Config object, which provides
@@ -29,6 +29,7 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 from app.db.session import Base
 from app.models.audit import Audit  # noqa
+
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
@@ -36,13 +37,16 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+
 def get_url():
     """
     Returns the database URL from the environment variable.
     This function replaces the need to have sqlalchemy.url in alembic.ini
     """
     from app.core.config import settings
+
     return settings.DATABASE_URL
+
 
 def include_object(object, name, type_, reflected, compare_to):
     """
@@ -52,6 +56,7 @@ def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name in ["celery_taskmeta", "celery_tasksetmeta"]:
         return False
     return True
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
@@ -86,16 +91,14 @@ def run_migrations_online() -> None:
 
     """
     connectable = engine_from_config(
-        {"sqlalchemy.url": get_url()},
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool
+        {"sqlalchemy.url": get_url()}, prefix="sqlalchemy.", poolclass=pool.NullPool
     )
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, 
+            connection=connection,
             target_metadata=target_metadata,
-            include_object=include_object
+            include_object=include_object,
         )
 
         with context.begin_transaction():
@@ -105,4 +108,4 @@ def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online() 
+    run_migrations_online()

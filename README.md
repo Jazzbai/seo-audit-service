@@ -70,18 +70,18 @@ This is the easiest and recommended way to get started. It runs all services (Fa
 **Steps:**
 
 1. **Clone the Repository**
-   ```bash
-   git clone <repository-url>
-   cd seo-audit
-   ```
+    ```bash
+    git clone <repository-url>
+    cd seo-audit
+    ```
 
 2. **Create and Configure the `.env` File**
 
-   Copy the example file to `.env`. This file holds all your configuration.
-   ```bash
-   cp .env.example .env
-   ```
-   Open the new `.env` file and **set a secure `API_KEY`**. You can also change the `API_PORT` if the default `8001` conflicts with another service.
+    Copy the example file to `.env`. This file holds all your configuration.
+    ```bash
+    cp .env.example .env
+    ```
+    Open the new `.env` file and **set a secure `API_KEY`**. You can also change the `API_PORT` if the default `8001` conflicts with another service.
 
    **Optional Dashboard Integration:**
    ```env
@@ -91,12 +91,12 @@ This is the easiest and recommended way to get started. It runs all services (Fa
    ```
 
 3. **Build and Run the Containers**
-   ```bash
-   docker-compose up --build
-   ```
-   This single command builds the Docker images and starts all services. Database migrations are run automatically by the `web` service on startup.
+    ```bash
+    docker-compose up --build
+    ```
+    This single command builds the Docker images and starts all services. Database migrations are run automatically by the `web` service on startup.
 
-   The API will be available at `http://127.0.0.1:8001` (or your custom port).
+    The API will be available at `http://127.0.0.1:8001` (or your custom port).
 
 ### 2. Manual Local Setup (Advanced)
 
@@ -112,114 +112,114 @@ This approach is for developers who want to run the Python services directly on 
 
 1. **Prepare Backing Services**
 
-   You can run PostgreSQL and RabbitMQ natively on your machine, or you can use Docker to easily run them.
+    You can run PostgreSQL and RabbitMQ natively on your machine, or you can use Docker to easily run them.
 
-   *Using Docker (Recommended for simplicity):*
-   ```bash
-   docker-compose up -d postgres-db rabbitmq
-   ```
-   *Manual Installation:* Ensure both services are installed and running on their default ports.
+    *Using Docker (Recommended for simplicity):*
+    ```bash
+    docker-compose up -d postgres-db rabbitmq
+    ```
+    *Manual Installation:* Ensure both services are installed and running on their default ports.
 
 2. **Create the Database and User (Manual PostgreSQL Setup)**
-   
-   If you are running PostgreSQL locally (not in Docker), you will need to manually create the database and user required by the application.
-   
-   Connect to PostgreSQL using the `psql` command-line tool:
-   ```bash
-   psql -U postgres
-   ```
-   
-   Then, run the following SQL commands one by one. These commands create the user and database as defined in the `.env.example` file. **Remember to use the same password you plan to set in your `.env` file.**
+    
+    If you are running PostgreSQL locally (not in Docker), you will need to manually create the database and user required by the application.
+    
+    Connect to PostgreSQL using the `psql` command-line tool:
+    ```bash
+    psql -U postgres
+    ```
+    
+    Then, run the following SQL commands one by one. These commands create the user and database as defined in the `.env.example` file. **Remember to use the same password you plan to set in your `.env` file.**
 
-   ```sql
-   -- Create a dedicated user for the application
-   CREATE USER seo_audit_user WITH PASSWORD 'your_strong_password';
+    ```sql
+    -- Create a dedicated user for the application
+    CREATE USER seo_audit_user WITH PASSWORD 'your_strong_password';
 
-   -- Create the database
-   CREATE DATABASE seo_audit_db;
+    -- Create the database
+    CREATE DATABASE seo_audit_db;
 
-   -- Grant all privileges on the new database to the new user
-   GRANT ALL PRIVILEGES ON DATABASE seo_audit_db TO seo_audit_user;
+    -- Grant all privileges on the new database to the new user
+    GRANT ALL PRIVILEGES ON DATABASE seo_audit_db TO seo_audit_user;
 
-   -- Exit the psql client
-   \q
-   ```
+    -- Exit the psql client
+    \q
+    ```
 
 3. **Create and Activate Virtual Environment**
 
-   It's crucial to use a virtual environment to manage dependencies.
+    It's crucial to use a virtual environment to manage dependencies.
 
-   *On Windows (using PowerShell):*
-   ```powershell
-   # Create the venv using Python 3.12
-   py -3.12 -m venv venv
+    *On Windows (using PowerShell):*
+    ```powershell
+    # Create the venv using Python 3.12
+    py -3.12 -m venv venv
 
-   # Activate it
-   .\venv\Scripts\Activate.ps1
-   ```
+    # Activate it
+    .\venv\Scripts\Activate.ps1
+    ```
 
-   *On macOS / Linux:*
-   ```bash
-   # Create the venv using Python 3.12
-   python3.12 -m venv venv
+    *On macOS / Linux:*
+    ```bash
+    # Create the venv using Python 3.12
+    python3.12 -m venv venv
 
-   # Activate it
-   source venv/bin/activate
-   ```
-   Your terminal prompt should now be prefixed with `(venv)`.
+    # Activate it
+    source venv/bin/activate
+    ```
+    Your terminal prompt should now be prefixed with `(venv)`.
 
 4. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+    ```bash
+    pip install -r requirements.txt
+    ```
 
 5. **Configure the `.env` File for Manual Deployment**
 
-   Create the `.env` file if you haven't already (`cp .env.example .env`). **For manual deployment, you must update service hostnames** from Docker container names to localhost.
+    Create the `.env` file if you haven't already (`cp .env.example .env`). **For manual deployment, you must update service hostnames** from Docker container names to localhost.
 
-   **Critical Changes Required:**
-   ```env
-   # Change from Docker service names to localhost
-   DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/database_name
-   BROKER_URL=amqp://guest:guest@localhost:5672//
-   RESULT_BACKEND=db+postgresql+psycopg://user:password@localhost:5432/database_name
-   
-   # Set your API configuration
-   API_KEY=your-secret-api-key-here
-   API_PORT=8001
-   ```
+    **Critical Changes Required:**
+    ```env
+    # Change from Docker service names to localhost
+    DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/database_name
+    BROKER_URL=amqp://guest:guest@localhost:5672//
+    RESULT_BACKEND=db+postgresql+psycopg://user:password@localhost:5432/database_name
+    
+    # Set your API configuration
+    API_KEY=your-secret-api-key-here
+    API_PORT=8001
+    ```
 
-   **Why This is Required:**
-   - **Docker Compose**: Uses service names (`postgres-db`, `rabbitmq`) for internal networking
-   - **Manual Deployment**: Services run on localhost with standard ports
-   - **Common Mistake**: Forgetting to change service names causes connection failures
+    **Why This is Required:**
+    - **Docker Compose**: Uses service names (`postgres-db`, `rabbitmq`) for internal networking
+    - **Manual Deployment**: Services run on localhost with standard ports
+    - **Common Mistake**: Forgetting to change service names causes connection failures
 
-   **Service Name Mapping:**
-   - `postgres-db` → `localhost:5432`
-   - `rabbitmq` → `localhost:5672`
+    **Service Name Mapping:**
+    - `postgres-db` → `localhost:5432`
+    - `rabbitmq` → `localhost:5672`
 
 6. **Run Database Migrations**
 
-   Apply any pending database migrations.
-   ```bash
-   alembic upgrade head
-   ```
+    Apply any pending database migrations.
+    ```bash
+    alembic upgrade head
+    ```
 
 7. **Run the Application**
 
-   You need to run two processes in separate terminals (both with the `venv` activated).
+    You need to run two processes in separate terminals (both with the `venv` activated).
 
-   - **Terminal 1: Run FastAPI Server**
-     ```bash
-     # Port is set directly in the command (not controlled by .env file)
-     uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-     ```
+    - **Terminal 1: Run FastAPI Server**
+      ```bash
+      # Port is set directly in the command (not controlled by .env file)
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      ```
 
-   - **Terminal 2: Run Celery Worker**
-     ```bash
-     # Use unique hostname to avoid conflicts with other Celery workers
-     celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info --hostname=seo-audit@%h
-     ```
+    - **Terminal 2: Run Celery Worker**
+      ```bash
+      # Use unique hostname to avoid conflicts with other Celery workers
+      celery -A app.celery_app.celery_app worker -P threads --concurrency=10 --loglevel=info --hostname=seo-audit@%h
+      ```
 
 ## Using the API
 
@@ -232,13 +232,13 @@ You can interact with the API using tools like `curl`, Postman, or the auto-gene
 ```bash
 curl -X POST "http://127.0.0.1:8001/v1/audits" \
      -H "X-API-Key: your-api-key-here" \
-     -H "Content-Type: application/json" \
+-H "Content-Type: application/json" \
      -d '{
        "url": "https://example.com",
        "max_pages": 50,
        "user_id": "optional-user-id",
        "user_audit_report_request_id": "optional-request-id"
-     }'
+}'
 ```
 
 **Response:**
@@ -261,7 +261,7 @@ curl -X GET "http://127.0.0.1:8001/v1/audits/42" \
 ```json
 {
   "audit_id": 42,
-  "status": "COMPLETE",
+    "status": "COMPLETE",
   "url": "https://example.com",
   "user_id": "optional-user-id",
   "user_audit_report_request_id": "optional-request-id",
@@ -269,8 +269,8 @@ curl -X GET "http://127.0.0.1:8001/v1/audits/42" \
   "completed_at": "2024-01-15T10:35:00Z",
   "error_message": null,
   "technical_error": null,
-  "report_json": {
-    "summary": {
+    "report_json": {
+        "summary": {
       "total_pages": 25,
       "pages_with_issues": 8,
       "total_internal_links": 156,
@@ -300,7 +300,7 @@ curl -X GET "http://127.0.0.1:8001/v1/audits/42" \
     "broken_internal_links": [
       {
         "url": "https://example.com/missing-page",
-        "status": 404,
+                "status": 404,
         "category": "broken",
         "source_pages": ["https://example.com/page1"]
       }
@@ -340,7 +340,7 @@ The application provides comprehensive logging with structured JSON format:
   "memory_mb": 245.6,
   "context": {
     "crawl_output_file": "results/audit_results_42.jl"
-  }
+    }
 }
 ```
 
@@ -348,7 +348,7 @@ The application provides comprehensive logging with structured JSON format:
 
 If you have stuck audits, you can use the recovery utilities:
 
-```bash
+  ```bash
 # Check for stuck audits
 python recover_stuck_audits.py
 

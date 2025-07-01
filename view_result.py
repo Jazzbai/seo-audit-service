@@ -1,7 +1,10 @@
-import sys
-from app.celery_app import celery_app
-from celery.result import AsyncResult
 import json
+import sys
+
+from celery.result import AsyncResult
+
+from app.celery_app import celery_app
+
 
 def view_task_result(task_id: str):
     """
@@ -44,4 +47,4 @@ if __name__ == "__main__":
         task_id_to_view = sys.argv[1]
         view_task_result(task_id_to_view)
     else:
-        print("Usage: python view_result.py <task_id>") 
+        print("Usage: python view_result.py <task_id>")

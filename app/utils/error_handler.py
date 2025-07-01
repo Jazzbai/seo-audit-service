@@ -1,10 +1,11 @@
-import re
 import logging
-from urllib.parse import urlparse
-from typing import Dict, Tuple, Optional
+import re
 import socket
-import dns.resolver
+from typing import Dict, Optional, Tuple
+from urllib.parse import urlparse
+
 import dns.exception
+import dns.resolver
 
 logger = logging.getLogger(__name__)
 
@@ -13,273 +14,253 @@ ERROR_PATTERNS = {
     # DNS and Network Errors
     "nxdomain": {
         "user": "Website not found. Please check the URL and try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "dns resolution failed": {
         "user": "Website not found. Please check the URL and try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "name or service not known": {
         "user": "Website not found. Please check the URL and try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "nodename nor servname provided": {
         "user": "Invalid website address. Please check the URL format.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "domain validation failed": {
         "user": "Website not found. Please check the URL and try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "does not exist": {
         "user": "Website not found. Please check the URL and try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # Connection Errors
     "connection timeout": {
         "user": "Website is taking too long to respond. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "connection timed out": {
         "user": "Website is taking too long to respond. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "connection refused": {
         "user": "Website is currently unavailable. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "connection reset": {
         "user": "Connection to website was interrupted. Please try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "network is unreachable": {
         "user": "Network connection issue. Please check your internet connection.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "no route to host": {
         "user": "Website server is unreachable. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # HTTP Errors
     "http 400": {
         "user": "Invalid request to website. Please check the URL.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "http 401": {
         "user": "Website requires authentication to access.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    "http 403": {
-        "user": "Access to this website is forbidden.",
-        "status": "FAILED"
-    },
+    "http 403": {"user": "Access to this website is forbidden.", "status": "FAILED"},
     "http 404": {
         "user": "The webpage was not found. Please check the URL.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "http 429": {
         "user": "Website is limiting requests. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "http 500": {
         "user": "Website is experiencing technical difficulties.",
-        "status": "PARTIAL"
+        "status": "PARTIAL",
     },
     "http 502": {
         "user": "Website gateway error. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "http 503": {
         "user": "Website is temporarily unavailable. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "http 504": {
         "user": "Website gateway timeout. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # SSL/TLS Errors
     "ssl": {
         "user": "Website security certificate issues detected.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "certificate": {
         "user": "Website security certificate issues detected.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    "handshake": {
-        "user": "Secure connection to website failed.",
-        "status": "FAILED"
-    },
-    
+    "handshake": {"user": "Secure connection to website failed.", "status": "FAILED"},
     # Redirect Errors
     "redirect": {
         "user": "Website has configuration issues preventing analysis.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "too many redirects": {
         "user": "Website has too many redirects. Please check the URL.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # Content/Parsing Errors
     "empty response": {
         "user": "Website returned no content to analyze.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "no content": {
         "user": "No content could be analyzed on this website.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "keyerror: 'status'": {
         "user": "Website structure prevented proper analysis.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "keyerror: 'url'": {
         "user": "Website structure prevented proper analysis.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "empty dataframe": {
         "user": "No analyzable content found on this website.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "keyerror: 'title'": {
         "user": "Website structure prevented proper analysis.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "keyerror: 'internal'": {
-        "user": "Website structure prevented proper analysis.", 
-        "status": "FAILED"
+        "user": "Website structure prevented proper analysis.",
+        "status": "FAILED",
     },
     "crawl validation failed": {
         "user": "Website could not be properly analyzed.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # Crawl-specific Errors
     "crawl produced no usable results": {
         "user": "No content could be analyzed on this website.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    "spider closed": {
-        "user": "Website analysis was interrupted.",
-        "status": "PARTIAL"
-    },
+    "spider closed": {"user": "Website analysis was interrupted.", "status": "PARTIAL"},
     "closespider": {
         "user": "Website analysis reached configured limits.",
-        "status": "PARTIAL"
+        "status": "PARTIAL",
     },
-    
     # URL/Format Errors
     "invalid url": {
         "user": "Please enter a valid website URL (e.g., https://example.com).",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "malformed url": {
         "user": "Please enter a valid website URL format.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "missing scheme": {
         "user": "Please include http:// or https:// in the URL.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # File/System Errors
     "permission denied": {
         "user": "System permission error occurred during analysis.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    "disk space": {
-        "user": "System storage issue during analysis.",
-        "status": "FAILED"
-    },
+    "disk space": {"user": "System storage issue during analysis.", "status": "FAILED"},
     "file not found": {
         "user": "Analysis results could not be processed.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # Timeout Errors
     "timeout": {
         "user": "Analysis took too long to complete. Please try again.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
     "timed out": {
         "user": "Website analysis timed out. Please try again later.",
-        "status": "FAILED"
+        "status": "FAILED",
     },
-    
     # Memory/Resource Errors
     "memory": {
         "user": "Website is too large to analyze completely.",
-        "status": "PARTIAL"
+        "status": "PARTIAL",
     },
     "out of memory": {
         "user": "Website is too large to analyze completely.",
-        "status": "PARTIAL"
+        "status": "PARTIAL",
     },
 }
+
 
 def is_valid_url(url: str) -> Tuple[bool, Optional[str]]:
     """
     Validate URL format and basic reachability.
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     if not url or not isinstance(url, str):
         return False, "URL cannot be empty"
-    
+
     url = url.strip()
-    
+
     # Add protocol if missing
-    if not url.startswith(('http://', 'https://')):
-        url = 'http://' + url
-    
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+
     try:
         parsed = urlparse(url)
-        
+
         # Check for valid scheme
-        if parsed.scheme not in ['http', 'https']:
+        if parsed.scheme not in ["http", "https"]:
             return False, "URL must use http:// or https://"
-        
+
         # Check for valid hostname
         if not parsed.netloc:
             return False, "URL must include a domain name"
-        
+
         # Check for invalid characters
-        if any(char in parsed.netloc for char in [' ', '\t', '\n', '\r']):
+        if any(char in parsed.netloc for char in [" ", "\t", "\n", "\r"]):
             return False, "URL contains invalid characters"
-        
+
         # Basic hostname format validation
-        hostname = parsed.netloc.split(':')[0]  # Remove port if present
-        if not re.match(r'^[a-zA-Z0-9.-]+$', hostname):
+        hostname = parsed.netloc.split(":")[0]  # Remove port if present
+        if not re.match(r"^[a-zA-Z0-9.-]+$", hostname):
             return False, "Invalid domain name format"
-        
+
         # Check for minimum domain structure
-        if '.' not in hostname or hostname.startswith('.') or hostname.endswith('.'):
+        if "." not in hostname or hostname.startswith(".") or hostname.endswith("."):
             return False, "Invalid domain name format"
-        
+
         return True, None
-        
+
     except Exception as e:
         return False, f"Invalid URL format: {str(e)}"
+
 
 def check_domain_exists(url: str) -> Tuple[bool, Optional[str]]:
     """
     Check if domain exists via DNS lookup.
-    
+
     Returns:
         Tuple of (exists, error_message)
     """
     try:
         parsed = urlparse(url)
-        hostname = parsed.netloc.split(':')[0]  # Remove port if present
-        
+        hostname = parsed.netloc.split(":")[0]  # Remove port if present
+
         # Try DNS resolution
         try:
-            dns.resolver.resolve(hostname, 'A')
+            dns.resolver.resolve(hostname, "A")
             return True, None
         except dns.resolver.NXDOMAIN:
             return False, f"Domain '{hostname}' does not exist"
@@ -295,26 +276,27 @@ def check_domain_exists(url: str) -> Tuple[bool, Optional[str]]:
                 return True, None
             except socket.gaierror:
                 return False, f"Domain '{hostname}' cannot be resolved"
-            
+
     except Exception as e:
         return False, f"Domain validation error: {str(e)}"
+
 
 def classify_error(error_message: str, url: str = None) -> Dict[str, str]:
     """
     Classify error with comprehensive pattern matching and graceful fallback.
-    
+
     Args:
         error_message: The technical error message
         url: Optional URL for context
-        
+
     Returns:
         Dictionary with user_message, technical_message, and status
     """
     if not error_message:
         error_message = "Unknown error occurred"
-    
+
     error_lower = error_message.lower()
-    
+
     # Check for known error patterns
     for pattern, info in ERROR_PATTERNS.items():
         if pattern in error_lower:
@@ -322,65 +304,68 @@ def classify_error(error_message: str, url: str = None) -> Dict[str, str]:
             return {
                 "user_message": info["user"],
                 "technical_message": error_message,
-                "status": info["status"]
+                "status": info["status"],
             }
-    
+
     # Graceful fallback for unknown errors
     logger.warning(f"Unknown error pattern for URL {url}: {error_message}")
     return {
         "user_message": "Something went wrong while analyzing this website. Please try again.",
         "technical_message": error_message,
-        "status": "FAILED"
+        "status": "FAILED",
     }
+
 
 def validate_crawl_output(output_file: str) -> Tuple[bool, Optional[str]]:
     """
     Validate that crawl output file contains usable data.
-    
+
     Returns:
         Tuple of (is_valid, error_message)
     """
     try:
-        import pandas as pd
         import os
-        
+
+        import pandas as pd
+
         if not os.path.exists(output_file):
             return False, "Crawl output file not found"
-        
+
         if os.path.getsize(output_file) == 0:
             return False, "Crawl output file is empty"
-        
+
         try:
             df = pd.read_json(output_file, lines=True)
         except Exception as e:
             return False, f"Crawl output file is corrupted: {str(e)}"
-        
+
         if df.empty:
             return False, "Crawl produced no results"
-        
+
         # Check for required columns
-        required_columns = ['url']
+        required_columns = ["url"]
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return False, f"Crawl output missing required columns: {missing_columns}"
-        
+
         # Check if we have any valid URLs
-        if df['url'].isna().all() or len(df['url'].dropna()) == 0:
+        if df["url"].isna().all() or len(df["url"].dropna()) == 0:
             return False, "Crawl produced no valid URLs"
-        
+
         return True, None
-        
+
     except Exception as e:
         return False, f"Error validating crawl output: {str(e)}"
+
 
 def get_user_friendly_url_error(url: str) -> str:
     """Get user-friendly error message for URL validation failures."""
     url_valid, url_error = is_valid_url(url)
     if not url_valid:
         return f"Invalid URL format: {url_error}"
-    
+
     domain_exists, domain_error = check_domain_exists(url)
     if not domain_exists:
         return f"Website not found: {domain_error}"
-    
-    return "URL validation passed" 
+
+    return "URL validation passed"
