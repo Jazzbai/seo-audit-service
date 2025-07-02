@@ -135,11 +135,24 @@ This approach is for developers who want to run the Python services directly on 
     -- Create a dedicated user for the application
     CREATE USER seo_audit_user WITH PASSWORD 'your_strong_password';
 
-    -- Create the database
-    CREATE DATABASE seo_audit_db;
+    -- Create the database with proper ownership
+    CREATE DATABASE seo_audit_db OWNER seo_audit_user;
 
     -- Grant all privileges on the new database to the new user
     GRANT ALL PRIVILEGES ON DATABASE seo_audit_db TO seo_audit_user;
+
+    -- Connect to the new database
+    \c seo_audit_db
+
+    -- CRITICAL: PostgreSQL 15+ Permission Fix
+    -- Grant schema permissions (required for PostgreSQL 15+)
+    GRANT ALL ON SCHEMA public TO seo_audit_user;
+    GRANT CREATE ON SCHEMA public TO seo_audit_user;
+    GRANT USAGE ON SCHEMA public TO seo_audit_user;
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO seo_audit_user;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO seo_audit_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO seo_audit_user;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO seo_audit_user;
 
     -- Exit the psql client
     \q
@@ -410,7 +423,74 @@ The system automatically detects and filters common false positives from:
 - Administrative interfaces
 - Cross-domain restrictions
 
-**4. Memory Issues**
+**4. PostgreSQL Permission Errors**
+If you get "permission denied for schema public" errors during Alembic migrations:
+
+```bash
+# Connect as postgres superuser
+psql -U postgres -h localhost
+
+# Connect to your database and fix permissions
+\c seo_audit_db
+GRANT ALL ON SCHEMA public TO seo_audit_user;
+GRANT CREATE ON SCHEMA public TO seo_audit_user;
+GRANT USAGE ON SCHEMA public TO seo_audit_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO seo_audit_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO seo_audit_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO seo_audit_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO seo_audit_user;
+\q
+```
+
+**Reset Database (if needed):**
+```bash
+# Connect as postgres superuser
+psql -U postgres -h localhost
+
+# Terminate connections and reset database
+SELECT pg_terminate_backend(pg_stat_activity.pid)
+FROM pg_stat_activity 
+WHERE pg_stat_activity.datname = 'seo_audit_db' 
+  AND pid <> pg_backend_pid();
+
+DROP DATABASE IF EXISTS seo_audit_db;
+CREATE DATABASE seo_audit_db OWNER seo_audit_user;
+GRANT ALL PRIVILEGES ON DATABASE seo_audit_db TO seo_audit_user;
+
+# Apply permissions (same as above)
+\c seo_audit_db
+GRANT ALL ON SCHEMA public TO seo_audit_user;
+GRANT CREATE ON SCHEMA public TO seo_audit_user;
+GRANT USAGE ON SCHEMA public TO seo_audit_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO seo_audit_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO seo_audit_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO seo_audit_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO seo_audit_user;
+\q
+```
+
+```bash
+# Re-run migrations
+alembic upgrade head
+```
+
+**Verify Database Reset:**
+```bash
+# Check that database is clean
+psql -U seo_audit_user -d seo_audit_db -h localhost
+```
+```sql
+-- Should show 0 audits
+SELECT COUNT(*) FROM audits;
+
+-- Should show correct migration version
+SELECT * FROM alembic_version;
+
+-- List all tables
+\dt
+```
+
+**5. Memory Issues**
 - Monitor logs for memory usage: `grep "memory_mb" logs/workers/*.log`
 - Adjust `max_pages` parameter for large sites
 - Check available system resources
