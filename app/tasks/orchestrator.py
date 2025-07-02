@@ -295,6 +295,14 @@ def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
         os.makedirs("logs", exist_ok=True)
         output_file = f"results/audit_results_{audit_id}.jl"
         log_file = f"logs/advertools/audit_log_{audit_id}.log"
+        
+        # Clean up any existing files to ensure fresh crawl
+        if os.path.exists(output_file):
+            os.remove(output_file)
+            task_logger.log("info", f"Removed existing crawl file: {output_file}")
+        if os.path.exists(log_file):
+            os.remove(log_file)
+            task_logger.log("info", f"Removed existing log file: {log_file}")
 
         custom_settings = {
             "DOWNLOAD_DELAY": 1,
@@ -612,6 +620,9 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
                         internal_method_issue_links.append(link_info)
                     elif 400 <= status < 500:
                         internal_other_client_errors.append(link_info)
+                    elif 500 <= status < 600:
+                        # Server errors (503, 500, 502, etc.) are broken links
+                        internal_broken_links.append(link_info)
 
                 if internal_false_positives_filtered > 0:
                     task_logger.log(
@@ -652,7 +663,17 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
         task_logger.log("info", "Extracting external links for analysis")
         links_to_check = []
         try:
-            main_domain = urlparse(crawl_df["url"][0]).netloc
+            # Fix: Get main domain from audit URL instead of first crawled URL
+            db = SessionLocal()
+            try:
+                audit = db.query(Audit).filter(Audit.id == audit_id).first()
+                if not audit:
+                    raise ValueError(f"Audit {audit_id} not found")
+                main_domain = urlparse(audit.url).netloc
+                task_logger.log("info", f"Using main domain: {main_domain} (from audit URL: {audit.url})")
+            finally:
+                db.close()
+            
             link_df = adv.crawlytics.links(crawl_df, internal_url_regex=main_domain)
 
             # Check if 'internal' column exists
@@ -776,7 +797,7 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
 
         task_logger.log("info", f"Processing {len(links_to_check)} external links")
 
-        # Create URL to source mapping for preserving source URLs
+        # Create URL to source mapping for preserving ALL source URLs
         links_df = pd.DataFrame(links_to_check)
         url_to_source_mapping = {}
 
@@ -784,8 +805,12 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
             url = row["link"]
             source = row["source_url"]
             if url not in url_to_source_mapping:
-                url_to_source_mapping[url] = source
-            # If URL appears multiple times, keep the first source for simplicity
+                url_to_source_mapping[url] = []
+            url_to_source_mapping[url].append(source)
+
+        # Remove duplicates while preserving order
+        for url in url_to_source_mapping:
+            url_to_source_mapping[url] = list(dict.fromkeys(url_to_source_mapping[url]))
 
         unique_urls_to_check = list(url_to_source_mapping.keys())
 
@@ -795,6 +820,7 @@ def check_external_links(self, previous_task_output: dict, audit_id: int) -> dic
             {
                 "unique_urls": len(unique_urls_to_check),
                 "total_links": len(links_to_check),
+                "urls_with_multiple_sources": sum(1 for sources in url_to_source_mapping.values() if len(sources) > 1),
             },
         )
 
@@ -1853,16 +1879,15 @@ async def check_external_links_async(
                             )
                             continue  # Skip this URL
 
-                        # Use actual source URL from mapping, fallback to 'External Link Check'
-                        source_url = "External Link Check"
+                        # Use actual source URLs from mapping, support multiple sources per URL
+                        source_urls = ["External Link Check"]  # Default fallback
                         if url_to_source_mapping and url in url_to_source_mapping:
-                            source_url = url_to_source_mapping[url]
+                            source_urls = url_to_source_mapping[url]
 
                         link_info = {
                             "url": url,
                             "status": "Unreachable" if status == -1 else status,
-                            "source_url": source_url,
-                            "method_used": method_used,  # Track which method was used
+                            "source_urls": source_urls,
                         }
 
                         if status == -1:
@@ -1877,6 +1902,9 @@ async def check_external_links_async(
                             external_links_report["other_client_errors"].append(
                                 link_info
                             )
+                        elif 500 <= status < 600:
+                            # Server errors (503, 500, 502, etc.) are broken links
+                            external_links_report["broken_links"].append(link_info)
 
             except Exception as e:
                 logging_manager.log_audit_event(
@@ -1900,6 +1928,27 @@ async def check_external_links_async(
             f", {unreachable_recoveries} URLs recovered from unreachable status"
         )
     summary_msg += f", {false_positives_filtered} false positives filtered"
+
+    # Enhanced reporting statistics for multiple source tracking
+    total_broken_urls = (
+        len(external_links_report["broken_links"]) +
+        len(external_links_report["unreachable_links"]) +
+        len(external_links_report["permission_issues"]) +
+        len(external_links_report["method_issues"]) +
+        len(external_links_report["other_client_errors"])
+    )
+    
+    multiple_source_count = 0
+    total_source_instances = 0
+    for category in ["broken_links", "unreachable_links", "permission_issues", "method_issues", "other_client_errors"]:
+        for link in external_links_report[category]:
+            source_count = len(link.get("source_urls", []))
+            total_source_instances += source_count
+            if source_count > 1:
+                multiple_source_count += 1
+    
+    if multiple_source_count > 0:
+        summary_msg += f", {multiple_source_count} URLs found on multiple pages ({total_source_instances} total instances)"
 
     logging_manager.log_audit_event(audit_id, "info", summary_msg)
 
