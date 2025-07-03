@@ -54,14 +54,34 @@ def view_audit_result(audit_id: int):
                     print(f"\n--- Internal Broken Links ({len(broken_links)}) ---")
                     for i, link in enumerate(broken_links, 1):
                         print(f"{i}. {link['url']}")
-                        print(f"   Source: {link['source_url']}")
+                        # Handle both old single source_url and new source_urls array
+                        if 'source_urls' in link:
+                            sources = link['source_urls']
+                            if len(sources) == 1:
+                                print(f"   Source: {sources[0]}")
+                            else:
+                                print(f"   Sources ({len(sources)}):")
+                                for j, source in enumerate(sources, 1):
+                                    print(f"     {j}. {source}")
+                        else:
+                            print(f"   Source: {link.get('source_url', 'Unknown')}")
                 
                 external_broken = audit.report_json.get('external_broken_links', [])
                 if external_broken:
                     print(f"\n--- External Broken Links ({len(external_broken)}) ---")
                     for i, link in enumerate(external_broken, 1):
                         print(f"{i}. {link['url']}")
-                        print(f"   Source: {link['source_url']}")
+                        # Handle both old single source_url and new source_urls array
+                        if 'source_urls' in link:
+                            sources = link['source_urls']
+                            if len(sources) == 1:
+                                print(f"   Source: {sources[0]}")
+                            else:
+                                print(f"   Sources ({len(sources)}):")
+                                for j, source in enumerate(sources, 1):
+                                    print(f"     {j}. {source}")
+                        else:
+                            print(f"   Source: {link.get('source_url', 'Unknown')}")
                         print(f"   Status: {link['status']}")
                 
                 # Option to see full report (non-interactive safe)

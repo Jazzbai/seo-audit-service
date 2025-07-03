@@ -579,6 +579,10 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
         try:
             if "status" in crawl_df.columns:
                 error_links_df = crawl_df[crawl_df["status"] >= 400].copy()
+                
+                # Build internal URL to source mapping (same as external links)
+                internal_url_to_source_mapping = {}
+                
                 referer_col = "request_headers_Referer"
                 if referer_col in error_links_df.columns:
                     error_links_df.rename(
@@ -587,6 +591,16 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
                     error_links_df["source_url"] = error_links_df["source_url"].where(
                         pd.notna(error_links_df["source_url"]), "Internal Navigation"
                     )
+                    
+                    # Build mapping of URLs to their source URLs (handle multiple sources)
+                    for _, row in error_links_df.iterrows():
+                        url = row.get("url", "Unknown URL")
+                        source = row.get("source_url", "Internal Navigation")
+                        
+                        if url not in internal_url_to_source_mapping:
+                            internal_url_to_source_mapping[url] = []
+                        if source not in internal_url_to_source_mapping[url]:
+                            internal_url_to_source_mapping[url].append(source)
                 else:
                     error_links_df["source_url"] = "Internal Navigation"
 
@@ -596,7 +610,6 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
                 for _, row in error_links_df.iterrows():
                     url = row.get("url", "Unknown URL")
                     status = row.get("status", -1)
-                    source_url = row.get("source_url", "Internal Navigation")
 
                     # Apply false positive filtering to internal links too
                     is_false_pos, reason = is_likely_false_positive(url, status)
@@ -608,7 +621,12 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
                         )
                         continue  # Skip this URL
 
-                    link_info = {"url": url, "status": status, "source_url": source_url}
+                    # Use source URLs array (same as external links)
+                    source_urls = ["Internal Navigation"]  # Default fallback
+                    if url in internal_url_to_source_mapping:
+                        source_urls = internal_url_to_source_mapping[url]
+
+                    link_info = {"url": url, "status": status, "source_urls": source_urls}
 
                     if status == -1:
                         internal_unreachable_links.append(link_info)
@@ -649,7 +667,7 @@ def compile_report_from_crawl(self, crawl_output_file: str, audit_id: int) -> di
                             {
                                 "url": url,
                                 "status": "Unreachable",
-                                "source_url": "Timeout/Error",
+                                "source_urls": ["Timeout/Error"],
                             }
                         )
                 if internal_unreachable_links:
