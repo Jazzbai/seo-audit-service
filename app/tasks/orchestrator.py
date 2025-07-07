@@ -23,6 +23,48 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
 
+
+def get_results_file_path(filename: str) -> str:
+    """
+    Determine the file path for results based on the SAVE_RESULTS_TO_DISK setting.
+    
+    Args:
+        filename: The name of the file (e.g., "audit_results_123.jl")
+        
+    Returns:
+        Full path to the file - either in results/ directory or temp directory
+    """
+    if settings.SAVE_RESULTS_TO_DISK:
+        # Ensure results directory exists
+        os.makedirs("results", exist_ok=True)
+        return f"results/{filename}"
+    else:
+        # Use system temp directory when not saving to disk
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        return os.path.join(temp_dir, filename)
+
+
+def should_cleanup_file(file_path: str) -> bool:
+    """
+    Determine if a file should be cleaned up based on SAVE_RESULTS_TO_DISK setting.
+    
+    Args:
+        file_path: Full path to the file
+        
+    Returns:
+        True if file should be cleaned up, False if it should be preserved
+    """
+    if settings.SAVE_RESULTS_TO_DISK:
+        # When saving to disk, only clean up temp files, not results files
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        return file_path.startswith(temp_dir)
+    else:
+        # When not saving to disk, clean up all files (they're all temporary)
+        return True
+
+
 # --- Learning Notes: Stop Words ---
 STOP_WORDS = {
     "i",
@@ -291,9 +333,8 @@ def run_advertools_crawl(self, audit_id: int, url: str, max_pages: int) -> str:
             raise ValueError(error_msg)
 
         task_logger.log("info", "Setting up crawl directories and files")
-        os.makedirs("results", exist_ok=True)
         os.makedirs("logs", exist_ok=True)
-        output_file = f"results/audit_results_{audit_id}.jl"
+        output_file = get_results_file_path(f"audit_results_{audit_id}.jl")
         log_file = f"logs/advertools/audit_log_{audit_id}.log"
         
         # Clean up any existing files to ensure fresh crawl
@@ -993,8 +1034,8 @@ def save_final_report(self, previous_task_output: dict, audit_id: int):
         finally:
             db.close()
 
-        # Cleanup crawl output file
-        if crawl_output_file and os.path.exists(crawl_output_file):
+        # Cleanup crawl output file (only if not saving to disk)
+        if crawl_output_file and should_cleanup_file(crawl_output_file):
             try:
                 os.remove(crawl_output_file)
                 task_logger.log(
@@ -1002,6 +1043,10 @@ def save_final_report(self, previous_task_output: dict, audit_id: int):
                 )
             except OSError as e:
                 task_logger.log("warning", f"Error cleaning up crawl file: {e}")
+        elif crawl_output_file and settings.SAVE_RESULTS_TO_DISK:
+            task_logger.log(
+                "info", "Preserved crawl output file for analysis", {"file": crawl_output_file}
+            )
 
 
 @celery_app.task(bind=True)
@@ -1731,9 +1776,8 @@ async def check_external_links_async(
     )
 
     # Prepare output files for each chunk
-    os.makedirs("results", exist_ok=True)
     chunk_files = [
-        f"results/headers_{audit_id}_chunk_{i}.jl" for i in range(len(chunks))
+        get_results_file_path(f"headers_{audit_id}_chunk_{i}.jl") for i in range(len(chunks))
     ]
 
     # Semaphore to limit concurrent chunks (prevents overwhelming the system)
@@ -1931,11 +1975,12 @@ async def check_external_links_async(
                     f"Error processing results from {chunk_file}: {e}",
                 )
             finally:
-                # Clean up chunk file
-                try:
-                    os.remove(chunk_file)
-                except OSError:
-                    pass
+                # Clean up chunk file (only if not saving to disk)
+                if should_cleanup_file(chunk_file):
+                    try:
+                        os.remove(chunk_file)
+                    except OSError:
+                        pass
 
     # Enhanced summary with fallback and recovery statistics
     summary_msg = f"External link summary: {successful_chunks}/{len(chunks)} chunks successful, {total_urls_processed} URLs processed"

@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Celery Queue Configuration (prevents interference with other workers)
     CELERY_QUEUE_NAME: str = Field("seo_audit_queue", alias="CELERY_QUEUE_NAME")
 
+    # Results file storage configuration
+    SAVE_RESULTS_TO_DISK: bool = Field(False, alias="SAVE_RESULTS_TO_DISK")
+
     # Lowercase Celery settings for modern configuration
     task_serializer: str = "json"
     result_serializer: str = "json"
