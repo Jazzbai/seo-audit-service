@@ -105,7 +105,7 @@ def render_compose(filename, *, monitoring=False, settings=None, project_directo
     # Never read the user's .env or contact any daemon/host with real credentials.
     values = os.environ.copy()
     # CI and host shell state must not accidentally supply configuration under test.
-    for name in (*environment(), "COMPOSE_PROFILES", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME"):
+    for name in (*environment(), "COMPOSE_PROFILES", "COMPOSE_FILE", "COMPOSE_PROJECT_NAME", "COOLIFY_RESOURCE_UUID"):
         values.pop(name, None)
     values.update(environment() if settings is None else settings)
     command = ["docker", "compose", "--env-file", os.devnull, "-f", str(ROOT / filename)]
@@ -199,6 +199,18 @@ def test_secretless_build_render_still_refuses_runtime_startup():
     assert services["api"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert services["queue"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
     assert "split_preflight && alembic upgrade head" in services["migrate"]["command"][-1]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker CLI unavailable")
+@pytest.mark.parametrize("filename,default_name", [
+    ("compose.frontend.yaml", "forgeseo-frontend"),
+    ("compose.backend.yaml", "forgeseo-backend"),
+])
+def test_coolify_build_and_runtime_use_the_same_resource_namespace(filename, default_name):
+    resource = "forgeseo-test-resource-uuid"
+    config = render_compose(filename, settings={"COOLIFY_RESOURCE_UUID": resource}, project_directory=ROOT)
+    assert config["name"] == resource
+    assert render_compose(filename, settings={}, project_directory=ROOT)["name"] == default_name
 
 
 def test_default_web_image_keeps_original_caddyfile_and_split_edge_is_additive():

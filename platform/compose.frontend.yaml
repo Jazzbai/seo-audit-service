@@ -1,6 +1,8 @@
 # Existing HOST Caddy owns 80/443. This stack serves only the static frontend.
 # If Caddy is containerized, verify its networking before using this file.
-name: forgeseo-frontend
+# Coolify uses the resource UUID for builds and injects it again at startup.
+# Keep both phases on the same image/network namespace; retain a CLI default.
+name: ${COOLIFY_RESOURCE_UUID:-forgeseo-frontend}
 services:
   web:
     build:

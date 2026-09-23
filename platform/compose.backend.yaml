@@ -2,7 +2,7 @@
 # Production preparation only: see docs/SPLIT_HOST_DEPLOYMENT.md before use.
 # Coolify builds with no runtime secrets. Empty build-time values are intentional;
 # split_preflight gates migration, the queue and every application at startup.
-name: forgeseo-backend
+name: ${COOLIFY_RESOURCE_UUID:-forgeseo-backend}
 x-environment: &environment
   DATABASE_URL: ${DATABASE_URL:-}
   BROKER_URL: amqp://forge:${QUEUE_PASSWORD:-}@queue:5672//
