@@ -1,0 +1,15 @@
+[Unit]
+Description=Restrict the ForgeSEO private API port to its frontend proxy
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/forgeseo/api-firewall.env
+ExecStart=/usr/bin/python3 /etc/forgeseo/split_api_firewall.py apply --bind-ip ${API_BIND_IP} --proxy-ip ${TRUSTED_PROXY_IP} --port ${API_PORT}
+ExecReload=/usr/bin/python3 /etc/forgeseo/split_api_firewall.py apply --bind-ip ${API_BIND_IP} --proxy-ip ${TRUSTED_PROXY_IP} --port ${API_PORT}
+# Stopping this unit deliberately leaves protection in place. Remove only the
+# exact rule with the helper's explicit remove command after stopping the API.
+
+[Install]
+WantedBy=multi-user.target

@@ -60,6 +60,21 @@ The private API hop is HTTP; require an isolated trusted network or add an
 encrypted tunnel/internal TLS. Docker-published ports need verified firewall
 coverage, not an assumption that a private bind address is an access list.
 
+For an iptables-managed Ubuntu backend, `scripts/split_api_firewall.py` provides
+an explicit `check`, `apply`, or `remove` operation for one private destination
+and TCP port. It drops non-proxy sources in raw PREROUTING, before Docker DNAT,
+without flushing chains or changing any default policy. It confirms the bind
+address belongs to the host. Install the helper and a non-secret
+`api-firewall.env` under `/etc/forgeseo/`; the supplied
+`deploy/split/forgeseo-api-firewall.service` runs it before Docker on boot.
+Review host compatibility before installing or enabling it. Do not use this
+helper on a different firewall backend without implementing and testing that
+integration. Confirm access from the real frontend, denial from another host,
+and continued access to existing apps after installation. The unit must be
+enabled, not merely started. No reboot or server-wide firewall reset is part
+of this procedure. Remove only its exact rule after stopping the API, never
+flush a chain. See [Docker firewall behavior](https://docs.docker.com/engine/network/firewall-iptables/).
+
 ## Build and activation boundaries
 
 The Compose files render/build without runtime secrets. Blank build values
