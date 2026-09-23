@@ -1,0 +1,36 @@
+name: forgeseo-seo-test
+services:
+  seo-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: isolated-seo-fixture-root-not-production
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: isolated-seo-fixture-db-not-production
+    volumes:
+      - seo_database:/var/lib/mysql
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  seo-wp:
+    image: wordpress:6.9-php8.3-apache
+    environment:
+      WORDPRESS_DB_HOST: seo-db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: isolated-seo-fixture-db-not-production
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_CONFIG_EXTRA: "define('WP_ENVIRONMENT_TYPE', 'local');"
+    ports:
+      - "127.0.0.1:18092:80"
+    volumes:
+      - seo_files:/var/www/html
+      - ../scripts/seo_plugin_fixture.php:/fixture/setup.php:ro
+      - ../wordpress:/fixture/connector:ro
+    depends_on:
+      seo-db:
+        condition: service_healthy
+volumes:
+  seo_database:
+  seo_files:

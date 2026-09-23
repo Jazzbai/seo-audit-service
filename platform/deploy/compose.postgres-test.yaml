@@ -1,0 +1,22 @@
+name: forgeseo-postgres-live-test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: forge_live_test
+      POSTGRES_PASSWORD: ${FORGE_LIVE_PG_PASSWORD:-forge-live-postgres-test-only}
+      POSTGRES_DB: forge_live_fixture
+    ports:
+      - "127.0.0.1:15434:5432"
+    volumes:
+      - forgeseo_postgres_live_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U forge_live_test -d forge_live_fixture"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  forgeseo_postgres_live_test_data:
+    name: forgeseo_postgres_live_test_data

@@ -1,0 +1,22 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:8080 {
+	encode zstd gzip
+	handle /healthz {
+		respond "ok" 200
+	}
+	# API requests accidentally routed here must not return a misleading SPA 200.
+	@backend path /api /api/* /health
+	handle @backend {
+		respond "API routing is not configured on the edge proxy" 503
+	}
+	handle {
+		root * /srv/www
+		try_files {path} /index.html
+		file_server
+	}
+}

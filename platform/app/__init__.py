@@ -1,0 +1,1 @@
+"""ForgeSEO standalone platform."""

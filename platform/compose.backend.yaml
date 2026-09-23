@@ -1,0 +1,148 @@
+# Standalone backend stack. Do NOT merge with the root compose.yaml.
+# Production preparation only: see docs/SPLIT_HOST_DEPLOYMENT.md before use.
+# Coolify builds with no runtime secrets. Empty build-time values are intentional;
+# split_preflight gates migration, the queue and every application at startup.
+name: forgeseo-backend
+x-environment: &environment
+  DATABASE_URL: ${DATABASE_URL:-}
+  BROKER_URL: amqp://forge:${QUEUE_PASSWORD:-}@queue:5672//
+  QUEUE_PASSWORD: ${QUEUE_PASSWORD:-}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  PUBLIC_URL: https://${FORGE_HOSTNAME:-deployment.invalid}
+  APP_ADDRESS: ${FORGE_HOSTNAME:-deployment.invalid}
+  COOKIE_SECURE: "true"
+  GLOBAL_PAUSE: "true"
+  API_BIND_IP: ${API_BIND_IP:-127.0.0.1}
+  TRUSTED_PROXY_IP: ${TRUSTED_PROXY_IP:-127.0.0.1}
+  ARTIFACT_ROOT: /srv/artifacts
+x-volumes: &app-volumes
+  - artifacts:/srv/artifacts
+  - type: bind
+    # Fixed non-secret host path also avoids Coolify's raw-parser attempting to
+    # expand a runtime-only variable while preparing bind mount directories.
+    source: /etc/forgeseo/db-ca.crt
+    target: /run/forgeseo/db-ca.crt
+    read_only: true
+    bind:
+      create_host_path: false
+x-app: &app
+  build:
+    context: .
+    target: backend
+  environment: *environment
+  volumes: *app-volumes
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  depends_on:
+    queue:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+services:
+  queue:
+    image: rabbitmq:3.13-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: forge
+      RABBITMQ_DEFAULT_PASS: ${QUEUE_PASSWORD:-}
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+  migrate:
+    build:
+      context: .
+      target: backend
+    environment:
+      <<: *environment
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+    volumes: *app-volumes
+    command: [sh, -ec, "python -m scripts.split_preflight && alembic upgrade head"]
+    restart: "no"
+  api:
+    <<: *app
+    environment:
+      <<: *environment
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --proxy-headers
+      - --forwarded-allow-ips=${TRUSTED_PROXY_IP:-127.0.0.1}
+    ports:
+      - target: 8000
+        published: ${API_PORT:-18001}
+        host_ip: ${API_BIND_IP:-127.0.0.1}
+        protocol: tcp
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, api]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+  worker:
+    <<: *app
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: platform
+    command: [celery, -A, app.worker:celery, worker, -Q, platform, --concurrency=2, --hostname=platform@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  browser:
+    <<: *app
+    build:
+      context: .
+      target: browser
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: browser
+    command: [celery, -A, app.worker:celery, worker, -Q, browser, --concurrency=1, --hostname=browser@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+  scheduler-worker:
+    <<: *app
+    profiles: [monitoring]
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: scheduler
+    command: [celery, -A, app.worker:celery, worker, -Q, scheduler, --concurrency=1, --hostname=scheduler@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  beat:
+    <<: *app
+    profiles: [monitoring]
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PIDFILE: /tmp/forgeseo-beat.pid
+    command: [celery, -A, app.worker:celery, beat, --schedule=/tmp/celerybeat-schedule, --pidfile=/tmp/forgeseo-beat.pid, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, process]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+volumes:
+  artifacts:
+  rabbitmq:

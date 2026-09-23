@@ -1,0 +1,32 @@
+# Existing HOST Caddy owns 80/443. This stack serves only the static frontend.
+# If Caddy is containerized, verify its networking before using this file.
+name: forgeseo-frontend
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        CADDYFILE: deploy/split/Caddyfile.web
+    ports:
+      - target: 8080
+        published: ${FRONTEND_PORT:-18080}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    # The pinned Caddy binary has this file capability; without it exec fails
+    # even when listening on the unprivileged container port 8080.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

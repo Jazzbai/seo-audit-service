@@ -1,0 +1,235 @@
+name: forgeseo-platform
+x-app: &app
+  build:
+    context: .
+    target: backend
+  environment: &environment
+    DATABASE_URL: postgresql+psycopg://forge:${DB_PASSWORD:?Set DB_PASSWORD}@db:5432/forge
+    BROKER_URL: amqp://forge:${QUEUE_PASSWORD:?Set QUEUE_PASSWORD}@queue:5672//
+    ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set a strong ENCRYPTION_KEY}
+    PUBLIC_URL: ${PUBLIC_URL:?Set the browser origin}
+    COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    GLOBAL_PAUSE: "true"
+    ARTIFACT_ROOT: /srv/artifacts
+  volumes:
+    - artifacts:/srv/artifacts
+  init: true
+  stop_grace_period: 30s
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+    queue:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      POSTGRES_DB: forge
+    volumes:
+      - database:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U forge -d forge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+  queue:
+    image: rabbitmq:3.13-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: forge
+      RABBITMQ_DEFAULT_PASS: ${QUEUE_PASSWORD:?Set QUEUE_PASSWORD}
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+  migrate:
+    build:
+      context: .
+      target: backend
+    environment: *environment
+    command: [alembic, upgrade, head]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+  api:
+    <<: *app
+    environment:
+      <<: *environment
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:?Set BOOTSTRAP_TOKEN for first-owner setup}
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, api]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+  worker:
+    <<: *app
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: platform
+    command: [celery, -A, app.worker:celery, worker, -Q, platform, --concurrency=2, --hostname=platform@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  scheduler-worker:
+    <<: *app
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: scheduler
+    command: [celery, -A, app.worker:celery, worker, -Q, scheduler, --concurrency=1, --hostname=scheduler@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+  beat:
+    <<: *app
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PIDFILE: /tmp/forgeseo-beat.pid
+    command: [celery, -A, app.worker:celery, beat, --schedule=/tmp/celerybeat-schedule, --pidfile=/tmp/forgeseo-beat.pid, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, process]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  browser:
+    <<: *app
+    build:
+      context: .
+      target: browser
+    environment:
+      <<: *environment
+      CELERY_HEALTH_PREFIX: browser
+    command: [celery, -A, app.worker:celery, worker, -Q, browser, --concurrency=1, --hostname=browser@%h, --loglevel=warning]
+    healthcheck:
+      test: [CMD, python, /srv/deploy/healthcheck.py, worker]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+  backup:
+    <<: *app
+    profiles: [backup]
+    environment:
+      <<: *environment
+      BACKUP_KEY: ${BACKUP_KEY:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-172800}
+      BACKUP_MIRROR_DIRECTORY: ${BACKUP_MIRROR_DIRECTORY:-}
+    command:
+      - sh
+      - -ec
+      - >-
+        test -n "$${BACKUP_KEY}" || { echo 'BACKUP_KEY is required for the backup profile' >&2; exit 2; };
+        mkdir -p /srv/backups;
+        while :; do
+        stamp="$$(date -u +%Y%m%dT%H%M%SZ)";
+        python -m scripts.backup create "/srv/backups/forgeseo-$${stamp}.forge";
+        find /srv/backups -maxdepth 1 -type f -name 'forgeseo-*.forge' -mtime +"$${BACKUP_RETENTION_DAYS}" -delete;
+        sleep "$${BACKUP_INTERVAL_SECONDS}";
+        done
+    volumes:
+      - artifacts:/srv/artifacts:ro
+      - backups:/srv/backups
+      # The bind is dormant until BACKUP_MIRROR_DIRECTORY is set. Set both
+      # BACKUP_MIRROR_HOST_PATH and BACKUP_MIRROR_DIRECTORY for a real mirror.
+      # The fallback keeps the base Compose file renderable when the feature
+      # is disabled; it is not treated as off-site storage.
+      - type: bind
+        source: ${BACKUP_MIRROR_HOST_PATH:-./.forgeseo-backup-mirror}
+        target: /srv/backup-mirror
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      backup-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -m, scripts.backup_healthcheck]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+  backup-init:
+    build:
+      context: .
+      target: backend
+    profiles: [backup, restore]
+    user: "0:0"
+    command: [sh, -ec, "mkdir -p /srv/backups && chown 10001:10001 /srv/backups && chmod 700 /srv/backups"]
+    volumes:
+      - backups:/srv/backups
+    restart: "no"
+  restore:
+    <<: *app
+    profiles: [restore]
+    environment:
+      <<: *environment
+      BACKUP_KEY: ${BACKUP_KEY:-}
+    command: [sleep, infinity]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      queue:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      backup-init:
+        condition: service_completed_successfully
+    volumes:
+      - artifacts:/srv/artifacts
+      - backups:/srv/backups
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      APP_ADDRESS: ${APP_ADDRESS:-localhost}
+    ports:
+      - "${HTTP_PORT:-18080}:80"
+      - "${HTTPS_PORT:-18443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # Caddy redirects HTTP to HTTPS when TLS is enabled. Its local admin
+      # endpoint is stable regardless of the configured public hostname and
+      # confirms that the reverse proxy process is serving its configuration.
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:2019/config/]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 15s
+    restart: unless-stopped
+volumes:
+  database:
+  rabbitmq:
+  artifacts:
+  backups:
+  caddy_data:
+  caddy_config:

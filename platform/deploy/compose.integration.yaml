@@ -1,0 +1,60 @@
+name: forgeseo-integration
+services:
+  wp-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: isolated-fixture-root-not-production
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: isolated-fixture-db-not-production
+    volumes: [wp_database:/var/lib/mysql]
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  wp:
+    image: wordpress:6.8-php8.3-apache
+    environment: &wp_environment
+      WORDPRESS_DB_HOST: wp-db
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: isolated-fixture-db-not-production
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_CONFIG_EXTRA: "define('WP_ENVIRONMENT_TYPE', 'local');"
+    ports: ["127.0.0.1:18090:80"]
+    volumes:
+      - wp_files:/var/www/html
+      - ../scripts/wordpress_fixture.php:/fixture/setup.php:ro
+      - ../wordpress:/fixture/connector:ro
+    depends_on:
+      wp-db: {condition: service_healthy}
+  woo-db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_ROOT_PASSWORD: isolated-fixture-root-not-production
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: isolated-fixture-db-not-production
+    volumes: [woo_database:/var/lib/mysql]
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  woo:
+    image: wordpress:6.8-php8.3-apache
+    environment:
+      <<: *wp_environment
+      WORDPRESS_DB_HOST: woo-db
+    ports: ["127.0.0.1:18091:80"]
+    volumes:
+      - woo_files:/var/www/html
+      - ../scripts/wordpress_fixture.php:/fixture/setup.php:ro
+      - ../wordpress:/fixture/connector:ro
+    depends_on:
+      woo-db: {condition: service_healthy}
+volumes:
+  wp_database:
+  woo_database:
+  wp_files:
+  woo_files:
