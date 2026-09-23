@@ -1,0 +1,59 @@
+# Standalone recovery drill, never merged into the production stack.
+# Use a unique --project-name for each drill. No production database URL is read.
+name: forgeseo-restore-drill
+services:
+  restore-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: restore
+      POSTGRES_DB: forgeseo_restore_drill
+      POSTGRES_PASSWORD: ${RESTORE_DB_PASSWORD:?Set an independent URL-safe drill password}
+    volumes:
+      - restore_database:/var/lib/postgresql/data
+    networks: [isolated]
+    healthcheck:
+      test: [CMD, pg_isready, -U, restore, -d, forgeseo_restore_drill]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+  restore-init:
+    image: ${RESTORE_IMAGE:?Select the deployed backend image ID}
+    pull_policy: never
+    user: "0:0"
+    network_mode: none
+    command: [sh, -ec, "chown 10001:10001 /srv/restore-artifacts && chmod 700 /srv/restore-artifacts"]
+    volumes:
+      - restore_artifacts:/srv/restore-artifacts
+    restart: "no"
+  restore-check:
+    image: ${RESTORE_IMAGE:?Select the deployed backend image ID}
+    pull_policy: never
+    environment:
+      DATABASE_URL: postgresql+psycopg://restore:${RESTORE_DB_PASSWORD:?Set an independent URL-safe drill password}@restore-db:5432/forgeseo_restore_drill
+      ENCRYPTION_KEY: ${RESTORE_ENCRYPTION_KEY:?Provide the original application key privately}
+      BACKUP_KEY: ${RESTORE_BACKUP_KEY:?Provide the archive encryption key privately}
+      BACKUP_ARCHIVE: ${RESTORE_ARCHIVE:?Select the encrypted archive filename}
+      ARTIFACT_ROOT: /srv/restore-artifacts
+      GLOBAL_PAUSE: "true"
+      RESTORE_DRILL: "true"
+    command: [python, -m, scripts.split_restore_drill]
+    volumes:
+      - source_backups:/srv/backups:ro
+      - restore_artifacts:/srv/restore-artifacts
+    networks: [isolated]
+    depends_on:
+      restore-db:
+        condition: service_healthy
+      restore-init:
+        condition: service_completed_successfully
+    restart: "no"
+networks:
+  isolated:
+    internal: true
+volumes:
+  source_backups:
+    external: true
+    name: ${FORGE_BACKUP_VOLUME:?Select the existing backend encrypted-backup volume}
+  restore_database:
+  restore_artifacts:

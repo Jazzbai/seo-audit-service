@@ -88,6 +88,12 @@ Enable automatic push deployments only after manual redeployment succeeds.
 Never delete volumes as part of redeployment. An image rollback does not reverse
 a schema migration: retain a tested encrypted backup/restore plan.
 
+The optional `backup` profile and standalone `compose.restore-drill.yaml`
+provide split-host capture and isolated verification. Follow the
+[split recovery procedure](SPLIT_RECOVERY.md) for key custody, explicit profile
+activation, same-host storage limits and a real recovery drill. These files do
+not enable remote backups or prove a production restore by themselves.
+
 See [readiness](READINESS.md) and [operations](OPERATIONS.md). No production
 installation or seven-day pilot success is implied by these source files.
 

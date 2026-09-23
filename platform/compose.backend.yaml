@@ -143,6 +143,54 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+  backup-init:
+    profiles: [backup]
+    build:
+      context: .
+      target: backend
+    user: "0:0"
+    network_mode: none
+    command: [sh, -ec, "chown 10001:10001 /srv/backups && chmod 700 /srv/backups"]
+    volumes:
+      - backups:/srv/backups
+    restart: "no"
+  backup:
+    profiles: [backup]
+    build:
+      context: .
+      target: backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      BACKUP_KEY: ${BACKUP_KEY:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-172800}
+      ARTIFACT_ROOT: /srv/artifacts
+      GLOBAL_PAUSE: "true"
+    volumes:
+      - artifacts:/srv/artifacts:ro
+      - backups:/srv/backups
+      - type: bind
+        source: /etc/forgeseo/db-ca.crt
+        target: /run/forgeseo/db-ca.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    command: [python, -m, scripts.split_backup_loop]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      backup-init:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -m, scripts.backup_healthcheck]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
 volumes:
   artifacts:
   rabbitmq:
+  backups:

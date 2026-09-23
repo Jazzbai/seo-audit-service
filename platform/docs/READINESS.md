@@ -21,5 +21,10 @@ Current boundaries:
 - A seven-day unattended pilot requires seven real days of evidence. It has
   not been completed by the local release tests.
 
+The split-host backup profile and isolated PostgreSQL recovery drill now have
+local synthetic integration coverage. Remote archive creation, original-key
+recovery, off-host retention, and restoration on the selected deployment remain
+acceptance work. See [split recovery](SPLIT_RECOVERY.md).
+
 Use the [Coolify guide](COOLIFY_GITHUB.md) for Git-based installation. Do not run
 the single-host deployment gate against the split-server Compose definitions.
