@@ -15,6 +15,11 @@ Verification of this publication snapshot: **622 backend tests passed and
 claimed to have run. The prior frontend image build and local deployment checks
 are supporting evidence, not proof of a successful remote deployment.
 
+Publication correction: the legacy root's `lib/` ignore rule initially omitted
+three frontend source modules. The platform now explicitly includes
+`frontend/src/lib/`, and a regression test checks relative imports for missing
+files. Always build the published checkout, not only the development workspace.
+
 For installation use [the GitHub/Coolify guide](docs/COOLIFY_GITHUB.md) with Base
 Directory `/platform` and the selected deployment branch. Keep automation paused
 until certificate trust, access isolation, backup/restore and migration checks

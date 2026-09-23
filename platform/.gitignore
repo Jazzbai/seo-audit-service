@@ -15,6 +15,8 @@ playwright-report/
 *.sqlite*
 *.db
 *.tsbuildinfo
+!frontend/src/lib/
+!frontend/src/lib/**
 *.forge
 *.pem
 *.key

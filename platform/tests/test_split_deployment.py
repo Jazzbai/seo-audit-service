@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -12,6 +13,21 @@ from scripts.split_preflight import CA_PATH, validate_split_environment
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_frontend_relative_imports_are_present_in_publication():
+    source_root = ROOT / "frontend" / "src"
+    missing = []
+    for source in source_root.rglob("*"):
+        if source.suffix not in {".ts", ".tsx"}:
+            continue
+        for relative in re.findall(r"(?:from\s+|import\s*\()['\"](\.[^'\"]+)['\"]", source.read_text(encoding="utf-8")):
+            target = source.parent / relative
+            candidates = [target, *[Path(str(target) + ext) for ext in (".ts", ".tsx", ".js", ".jsx")],
+                          target / "index.ts", target / "index.tsx"]
+            if not any(candidate.is_file() for candidate in candidates):
+                missing.append(f"{source.relative_to(ROOT)}: {relative}")
+    assert not missing, "Publication is missing frontend modules: " + ", ".join(missing)
 
 
 def environment():
