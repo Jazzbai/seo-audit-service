@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -66,3 +67,12 @@ def test_address_must_belong_to_the_backend_host():
     verify_local_address("10.20.0.10", run=run)
     with pytest.raises(ValueError):
         verify_local_address("10.20.0.13", run=run)
+
+
+def test_boot_order_waits_for_the_address_checked_by_the_helper():
+    unit = (Path(__file__).resolve().parents[1] / "deploy/split/forgeseo-api-firewall.service").read_text()
+    assert "Wants=network-online.target" in unit
+    assert "After=network-online.target" in unit
+    assert "Before=docker.service" in unit
+    assert "WantedBy=multi-user.target" in unit
+    assert "ExecStop=" not in unit  # A routine stop must not remove protection.

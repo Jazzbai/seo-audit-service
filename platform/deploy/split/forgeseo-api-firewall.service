@@ -1,5 +1,7 @@
 [Unit]
 Description=Restrict the ForgeSEO private API port to its frontend proxy
+Wants=network-online.target
+After=network-online.target
 Before=docker.service
 
 [Service]
