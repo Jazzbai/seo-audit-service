@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.intelligence.content import check_article, generate_article
-from app.intelligence.research import research_brief
+from app.intelligence.research import _visible_text, research_brief
 
 
 def _facts() -> dict:
@@ -17,6 +17,53 @@ def _facts() -> dict:
 
 def _research_facts() -> dict:
     return {"business_name": "Northwind Repair", "services": ["Window repair"]}
+
+
+@pytest.mark.parametrize("boundary", ["main", 'div role="main"', "article"])
+def test_research_prefers_semantic_content_over_page_chrome(boundary):
+    closing = boundary.split()[0]
+    title, text = _visible_text(
+        '<html><head><title>Preparation guide</title></head><body>'
+        '<header><p>Official website banner.</p></header>'
+        '<nav><ul><li>Products and accounts.</li></ul></nav>'
+        '<p>Outside the main article.</p>'
+        f'<{boundary}><h1>Preparation</h1>'
+        '<p>Gather relevant vehicle information.</p>'
+        '<aside><p>Sponsored offers.</p></aside>'
+        '<form><p>Subscribe now.</p></form>'
+        '<div role="dialog"><p>Accept cookies.</p></div>'
+        '<p hidden>Hidden instructions.</p><p aria-hidden="true">Hidden menu.</p>'
+        f'</{closing}><footer><p>Terms and conditions.</p></footer></body></html>'
+    )
+    assert title == "Preparation guide"
+    assert text == "Preparation Gather relevant vehicle information."
+
+
+def test_research_keeps_article_header_and_does_not_duplicate_nested_paragraphs():
+    _, text = _visible_text(
+        '<main><article><header><h1>Preparation guide</h1></header>'
+        '<ul><li><p>Keep your estimate.</p></li></ul>'
+        '<blockquote><p>Ask about the next step.</p></blockquote>'
+        '</article></main>'
+    )
+    assert text == "Preparation guide Keep your estimate. Ask about the next step."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("html", [
+    '<nav><p>Menu content.</p></nav><main></main><p>Unrelated text.</p>',
+    '<header><p>Banner.</p></header><nav><p>Menu.</p></nav><footer><p>Footer.</p></footer>',
+    '<main><div hidden><p>Not visible.</p></div></main>',
+])
+async def test_research_empty_content_does_not_fall_back_to_navigation(html):
+    result = await research_brief(
+        {"sources": ["https://source.example/empty"]},
+        _research_facts(),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html)),
+    )
+    assert result["complete"] is False
+    assert result["sources"][0]["extracts"] == []
+    assert "source_empty" in result["blockers"]
 
 
 @pytest.mark.asyncio

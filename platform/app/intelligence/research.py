@@ -279,11 +279,39 @@ def _visible_text(html: str) -> tuple[str, str]:
     for tag in soup.find_all(["script", "style", "noscript", "template", "svg", "title"]):
         tag.decompose()
 
-    nodes = soup.find_all(["p", "h1", "h2", "h3", "h4", "li", "blockquote"])
+    # Navigation, government banners, forms and cookie dialogs are not article
+    # evidence. Keep article headers (which can include useful attribution),
+    # but discard global headers when no semantic content boundary exists.
+    for tag in soup.select(
+        'nav, footer, aside, form, [hidden], [aria-hidden="true"], '
+        '[role="navigation"], [role="banner"], [role="contentinfo"], '
+        '[role="complementary"], [role="dialog"]'
+    ):
+        if tag.parent is not None:
+            tag.decompose()
+    for tag in soup.find_all("header"):
+        if not tag.find_parent(["article", "main"]) and not tag.find_parent(attrs={"role": "main"}):
+            tag.decompose()
+
+    # Prefer explicit main content, not the first paragraphs anywhere in the
+    # document. An empty main remains empty evidence: do not fall back to the
+    # surrounding menu and accidentally mark research complete.
+    root = soup.find("main")
+    if root is None:
+        root = soup.find(attrs={"role": "main"})
+    if root is None:
+        root = soup.find("article")
+    if root is None:
+        root = soup.body if soup.body is not None else soup
+
+    nodes = root.find_all(["p", "h1", "h2", "h3", "h4", "li", "blockquote"])
+    # A list item or blockquote can contain paragraphs. Avoid repeating their
+    # text, which otherwise crowds out useful extracts in the bounded window.
+    nodes = [node for node in nodes if not node.find(["p", "h1", "h2", "h3", "h4", "li", "blockquote"])]
     chunks = [_normalized_text(node.get_text(" ", strip=True)) for node in nodes]
     chunks = [item for item in chunks if item]
     if not chunks:
-        text = _normalized_text(soup.get_text(" ", strip=True))
+        text = _normalized_text(root.get_text(" ", strip=True))
     else:
         text = " ".join(chunks)
     return title, text
