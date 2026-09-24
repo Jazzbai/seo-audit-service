@@ -15,7 +15,7 @@ export default defineConfig({
   // video or automatic screenshot; explicit captures happen after secrets clear.
   use: { baseURL: 'http://127.0.0.1:4173', actionTimeout: 20000, trace: 'off', video: 'off', screenshot: 'off', ...devices['Desktop Chrome'] },
   webServer: [
-    { command: `"${python}" ../scripts/pilot_browser_server.py --wordpress-only --scheduled-publication --retain-evidence${resume ? ` --resume-evidence "${resume}"` : ''}`, url: 'http://127.0.0.1:18082/health', reuseExistingServer: false, timeout: 60000 },
+    { command: `"${python}" ../scripts/pilot_browser_server.py --wordpress-only --scheduled-publication --render-pages --retain-evidence${resume ? ` --resume-evidence "${resume}"` : ''}`, url: 'http://127.0.0.1:18082/health', reuseExistingServer: false, timeout: 60000 },
     { command: 'npm run dev -- --host 127.0.0.1', url: 'http://127.0.0.1:4173', reuseExistingServer: false, timeout: 30000 },
   ],
 })

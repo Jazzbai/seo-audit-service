@@ -3,7 +3,8 @@
 Uses a disposable SQLite database and an in-process durable-job consumer. Real
 WordPress/WooCommerce HTTP is routed ONLY to the two existing Docker fixtures.
 No paid provider, real site, existing environment file, or production database
-is used. RabbitMQ/PostgreSQL and browser rendering have separate test gates.
+is used. RabbitMQ/PostgreSQL have separate test gates. Optional Chromium
+inspection uses the production handler with only fixture HTTP routing replaced.
 """
 import os
 import argparse
@@ -26,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--wordpress-only', action='store_true')
     parser.add_argument('--scheduled-publication', action='store_true')
+    parser.add_argument('--render-pages', action='store_true', help='Run the real Chromium handler against allowlisted fixtures')
     parser.add_argument('--retain-evidence', action='store_true')
     parser.add_argument('--resume-evidence', help='Existing retained WordPress-only rehearsal directory')
     args = parser.parse_args()
@@ -69,7 +71,7 @@ def main():
             ARTIFACT_ROOT=str(Path(temp) / 'artifacts'),
         )
         from test_wordpress_live import configure, FixtureTransport, integration_stack
-        from app import workflows, worker, network, scheduler
+        from app import workflows, worker, network, scheduler, browser
         from app.connectors.wordpress import WordPressClient
         from app.connectors.woocommerce import WooCommerceClient
         from app.intelligence import audit
@@ -102,15 +104,22 @@ def main():
             workflows.client_for = fixture_client
             workflows.fetch = fixture_fetch
             audit._default_transport = lambda origin=None: FixtureTransport()
+            if args.render_pages:
+                def fixture_browser_transport(origin):
+                    if origin not in {item['origin'] for item in fixtures.values()}:
+                        raise ValueError('Browser escaped the isolated fixture allowlist')
+                    return FixtureTransport()
+                browser.PublicTransport = fixture_browser_transport
             jobs = queue.Queue()
             stop = object()
             stop_schedule = threading.Event()
             schedule_errors = []
+            run_browser_jobs = args.render_pages
 
             def dispatch(args, **kwargs):
-                # Browser rendering is deliberately not simulated as successful.
-                # Its jobs remain queued in this source-HTML acceptance fixture.
-                if kwargs.get('queue') != 'browser':
+                # Either run real Chromium with the fixture transport or retain
+                # queued renderer jobs; never simulate successful rendering.
+                if kwargs.get('queue') != 'browser' or run_browser_jobs:
                     jobs.put(args[0])
 
             worker.execute_job.apply_async = dispatch
@@ -138,6 +147,19 @@ def main():
 
             consumer = threading.Thread(target=consume, daemon=True)
             consumer.start()
+            if args.resume_evidence and run_browser_jobs:
+                # Restore only the explicit rehearsal's read-only render queue.
+                # Never redispatch publishing or unrelated historical audits.
+                with SessionLocal() as db:
+                    for audit_job in db.scalars(select(Job).where(Job.kind == 'audit')):
+                        if not (audit_job.idempotency_key or '').startswith(f'{audit_job.site_id}:rehearsal-render:'):
+                            continue
+                        for job_id in (audit_job.result or {}).get('browser_job_ids', []):
+                            render_job = db.get(Job, job_id)
+                            if (render_job and render_job.kind == 'browser'
+                                    and render_job.site_id == audit_job.site_id
+                                    and render_job.status == 'queued'):
+                                jobs.put(job_id)
             ticker = None
             if args.scheduled_publication:
                 ticker = threading.Thread(target=scheduled_publications, daemon=True)
@@ -158,6 +180,7 @@ def main():
                         'resumed': bool(args.resume_evidence), 'fixture_key_reused': key_reused,
                         'sites': sites, 'articles_with_remote': articles,
                         'scheduled_publication': args.scheduled_publication,
+                        'real_chromium_handler': args.render_pages,
                         'scheduler_errors': schedule_errors,
                         'transport': 'real loopback WordPress HTTP; explicit fixture routing',
                         'queue': 'in-process job delivery; production worker.run_job'}

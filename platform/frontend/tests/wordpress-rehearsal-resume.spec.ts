@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { verifyPlatformRendering } from './wordpress-render-check'
 
 test('resume retained published operation: render, idempotent UI retry and rollback the same post', async ({ page, request }, testInfo) => {
   const metadata = await (await request.get('http://127.0.0.1:18082/__rehearsal')).json()
@@ -37,6 +38,7 @@ test('resume retained published operation: render, idempotent UI retry and rollb
   const article = await get(`/articles/${articleId}`)
   expect(article.status).toBe('published')
   expect(publication.status).toBe('published')
+  const renderJob = await verifyPlatformRendering(page, siteId, articleId, publication.result.url)
   const url = new URL(publication.result.url)
   expect(url.hostname).toBe('wordpress.fixture.test')
   const rendered = await page.context().newPage()
@@ -72,5 +74,5 @@ test('resume retained published operation: render, idempotent UI retry and rollb
   expect(history[0].id).toBe(publication.id)
   expect(history[0].status).toBe('rolled_back')
   await page.screenshot({ path: testInfo.outputPath('rolled-back.png'), fullPage: true })
-  await testInfo.attach('resumed-rehearsal-evidence', { body: JSON.stringify({ evidence_directory: metadata.evidence_directory, site_id: siteId, article_id: articleId, publication_id: publication.id, remote_id: publication.remote_id, publish_job_id: firstJob.id, remote_count_after_retry: posts.length, remote_final_status: 'draft', original_public_evidence: publication.result.evidence.sha256, fixture_reconnected: true }, null, 2), contentType: 'application/json' })
+  await testInfo.attach('resumed-rehearsal-evidence', { body: JSON.stringify({ evidence_directory: metadata.evidence_directory, site_id: siteId, article_id: articleId, publication_id: publication.id, remote_id: publication.remote_id, publish_job_id: firstJob.id, render_job_id: renderJob.id, browser_screenshot_sha256: renderJob.result.screenshot_sha256, remote_count_after_retry: posts.length, remote_final_status: 'draft', original_public_evidence: publication.result.evidence.sha256, fixture_reconnected: true }, null, 2), contentType: 'application/json' })
 })

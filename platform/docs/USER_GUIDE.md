@@ -6,7 +6,9 @@ no PowerShell, API keys in requests, or environment-file editing is required.
 
 ## What to do now
 
-1. Sign in to your deployed ForgeSEO application using your existing workspace.
+1. Sign in to [your deployed ForgeSEO application](https://forgeseo.139.138.153.13.sslip.io)
+   using your existing workspace. You can start reviewing now; you do not have to
+   enable automation or edit environment files.
 2. Choose the correct site from the site selector.
 3. Use **Overview** for monitoring freshness and coverage. A completed audit can
    still have errors. An empty queue does not mean the whole site is optimized.
@@ -103,5 +105,11 @@ recovery-key custody, one scheduler/write owner, monitoring and alert delivery,
 and a separately approved paid-work budget. Keep main pages and builder layouts
 protected. A seven-day pilot must then collect seven real days of evidence; this
 rehearsal does not start that clock or promise rankings/AI citations.
+
+The next bounded goal should be **live-pilot preparation**, not immediate
+unattended publication: resolve the real author/source blockers, agree on the
+exact article and allowed actions, verify independently held recovery keys and
+alert delivery, and produce an explicit go/no-go checklist. Keep live publishing
+disabled until those prerequisites and the owner's launch approval are recorded.
 
 See the [rehearsal evidence and remaining gates](reviews/WORDPRESS_PUBLISHING_REHEARSAL_2026-09-24.md).

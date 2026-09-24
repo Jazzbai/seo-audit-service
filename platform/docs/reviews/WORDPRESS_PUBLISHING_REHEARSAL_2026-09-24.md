@@ -1,4 +1,4 @@
-# WordPress publishing rehearsal — active acceptance ledger
+# WordPress publishing rehearsal — completed acceptance ledger
 
 This is the separate publishing-readiness goal, not the completed deployment
 milestone and not the seven-day live pilot. No new paid requests are authorized.
@@ -26,13 +26,13 @@ milestone and not the seven-day live pilot. No new paid requests are authorized.
 | Safety regressions | Pauses, protected pages, missing author/source, concurrent edits, revoked credentials, ambiguous timeout, restart and exhausted-budget tests | Passing automated tests; fault/evidence boundaries below |
 | Honest metering UI | Numeric counts visible; estimates, reservations and unknown actual costs distinguished; credential-redaction regressions | Passing API and desktop/mobile browser tests; cents no longer rounded to dollars |
 | Relevant tests | Reviewed test scope, passing backend/browser suites and actual rehearsal evidence; simulated failures labeled | 715 backend passed/30 optional skipped; 109 UI passed; 8 real PostgreSQL passed; five real-WP lifecycle cases and actual process-death recovery passed |
-| Delivery | Reviewed branch commit, compatible Coolify deployment preserving pauses, concise user guide and pilot go/no-go report | Pending |
+| Delivery | Reviewed branch commit, compatible Coolify deployment preserving pauses, concise user guide and pilot go/no-go report | Runtime release `73207bf` delivered and verified on both existing Coolify resources; guide and live-pilot gates below |
 
-Initial infrastructure checks show the WordPress fixture is running. Local
+Initial infrastructure checks showed the WordPress fixture running. Local
 Auto1Stop smoke workers and schedulers are stopped; no queued/running/retry jobs
 for that site. Other fixture stacks have no Auto1Stop record. No production site
-mutation, additional paid provider call, or deployment has been performed by this
-goal yet. Isolated fixture writes are recorded below.
+mutation or additional paid provider call was performed by this goal. Compatible
+platform deployments and isolated fixture writes are recorded below.
 
 ## Retained rehearsal checkpoint
 
@@ -64,7 +64,7 @@ goal yet. Isolated fixture writes are recorded below.
   and scheduler-quota suites now pass (15 tests). New protected-target tests
   reproduced three unsafe paths. Intended slug and WordPress sample permalink
   are now checked against policy before creation/publication; further safety
-  regression and final delivery checks remain outstanding.
+  regression and delivery results are recorded in the later checkpoints below.
 
 WordPress permalink behavior is grounded in the official
 [posts schema](https://developer.wordpress.org/rest-api/reference/posts/) and
@@ -90,6 +90,48 @@ These local artifacts and fixture keys are ignored, not published in Git.
   research. No new paid research/generation. This is not proof of autonomous
   fact-checking or production-quality writing without editorial review.
 
+## Real browser-handler follow-up
+
+The strengthened harness runs the actual `app.browser.inspect_page` Chromium
+handler, replacing only network transport with the allowlisted loopback fixture.
+The production SSRF protections and handler code are unchanged. It uses the
+supported audit API to queue rendering, not an unsupported direct browser-job API.
+
+- Retained article `a716786cd7c6438ab1115235fe7692d5`, WordPress post `704`,
+  publication `424ef54e40ac4ae1a268e6c5a96bbd80`, database
+  `artifacts/publishing-rehearsals/run-qaeev2hy/pilot.db`.
+- `renderer-resume-20260924-4.json` passed at 22:25 UTC: actual Chromium job
+  `444c17137a5040c889e643f47cb67f62` completed with HTTP 200, zero resource
+  failures, screenshot evidence and a stored `chromium_lab` measurement.
+- Screenshot SHA-256:
+  `7bed64d60a4485fe10ed868d794db1c4caa267a91e3961f91dfac45b4d10c24d`.
+- Same publish job returned on retry, one remote post, successful UI rollback to
+  draft and retained history. Rendering is a lab observation, not field data or
+  a Core Web Vitals result.
+- Earlier attempts exposed test-harness mistakes: an unsupported direct browser
+  API request, a shadowed dispatch flag and a missing site prefix when restoring
+  a queued render job. These were fixed in test code; the retained publication
+  was resumed rather than creating replacement posts. Unrelated historical
+  queued browser jobs were not relabeled complete.
+
+The final fresh end-to-end run, `chromium-full-20260924.json`, then passed
+without resuming or retrying the test (58.4 seconds for the test; zero
+unexpected, skipped or flaky results). This exercises new browser-job dispatch
+as well as the complete UI schedule/publication/rollback sequence:
+
+- Site `bc2c49fe4234464fa54a2f3dc412059c`; article
+  `b0a2cb7ef7574d638fdc2ec09835db39`; WordPress post **706**.
+- Publication `fa49af84abfd4b419c6588b08d8da908`, publish job
+  `e718e85f4ef547a588efba073e332519`, real Chromium job
+  `4808a626c11240d4adf720eeeb93cde4`.
+- Retained database/artifacts `artifacts/publishing-rehearsals/run-c7xntbn6`;
+  final remote **draft**, local **rolled_back**, one post after retry,
+  no scheduler errors.
+- Browser screenshot SHA-256
+  `97d1fad49034e4ab20da8c4cf55ac8a21f052c8743b2cbd9a9bffef486a883b9`;
+  source-HTML SHA-256
+  `c24db4a136237ef141c578f88a1c7549b97914cd52bfc1b45d335169cb97a5d6`.
+
 ## Failure and regression coverage
 
 | Gate | Evidence | Boundary |
@@ -113,7 +155,7 @@ fixed. A resumed publication now gets a distinct linked job while retaining its
 original remote operation and original failed/uncertain job. Held read-only
 reconciliation is no longer permanently cached as the only result.
 
-## Production preservation and delivery gate
+## Production preservation and delivery
 
 At 22:03 UTC: Auto1StopShop site/global pause both true; policy v2 disabled with
 no allowed actions; zero publications; review article unchanged at 3,418
@@ -127,19 +169,49 @@ active with successful transfer checks; six archives retained. The previous
 populated isolated restore evidence remains valid and its DB stays stopped.
 No restore/key rotation or migration/schema change is introduced by this release.
 
-**Branch delivery and compatible deployment remain pending at this checkpoint.**
-Do not equate passing local tests with completed production deployment.
+Runtime changes were reviewed and pushed as `73207bf` to
+`Jazzbai/seo-audit-service:platform-deployment`. Both existing Coolify deployments
+succeeded; no new production resource, environment/key change, database migration
+or schedule owner was introduced:
+
+- Backend deployment `o149tnrw1yse20i6e0sdjn45`. Running API, worker and scheduler
+  source hashes match the reviewed release; all seven services are healthy.
+- Frontend deployment `cd3p34rl9ugr12gn42fd5dzh`, finished at 22:19 UTC. Verified
+  public asset `/assets/index-D1GIEMNa.js`, actual authenticated article UI and
+  budget controls, rather than relying on Coolify's stale commit display label.
+- Public article UI records **4,279 input / 856 output tokens**. The $0.50
+  reservation and unknown actual cost are shown distinctly; no paid request was
+  made for this check.
+- At 22:24 UTC both pauses remained true, policy v2 disabled, actions empty,
+  zero publications and unchanged author/source blockers. The 3,418-character
+  article SHA-256 remains
+  `8fc07e7410b64a5a7c5e1cc6e61bb47b10a79fa592bc2bde8cb35a6d0536019e`,
+  matching the prior review-trial evidence. Both stored WordPress and AI
+  credentials still decrypt. Budget/reservations remain unchanged.
+- Scheduler heartbeat advanced after deployment; queue delay and missed checks
+  were zero, WordPress polling healthy. Overall coverage still reports its real
+  partial/degraded condition; this release does not resolve every finding.
+- Off-host transfer last succeeded at 22:15 UTC; timer active, service successful,
+  six archives retained, no deletions. Previous isolated restore verified 19
+  tables, 87 artifacts and one credential, with automation paused and no external
+  requests. **Independent recovery-key custody was not verified by that drill**;
+  it remains a live-pilot prerequisite, not an asserted success.
+
+The subsequent closeout commit changes only tests, the isolated harness and
+documentation. It does not alter deployed application source or require another
+production restart. Local evidence/fixture keys are excluded from Git.
 
 ## Live-pilot decision and owner prerequisites
 
-The rehearsal supports a controlled-pilot readiness decision after delivery, not
+The completed rehearsal supports a controlled-pilot readiness decision, not
 automatic activation. Auto1StopShop remains **NO-GO for publishing now** until:
 
 - A real author and source-validation/editorial blockers are resolved.
 - The owner approves precise article enrollment, protected paths, publishing
   limits and budget, and explicitly authorizes the separate live pilot.
 - Provider invoice-actual costs are reconciled when available; estimates are not
-  invoices. Backup-transfer alerting/email delivery and operational response
+  invoices. Independently held recovery keys, backup-transfer alerting/email
+  delivery and operational response
   ownership are verified (host transfer health is not yet integrated in the UI).
 - Monitoring, backup freshness and one schedule/write owner are checked at launch.
 
@@ -148,5 +220,5 @@ all SEO findings, rankings and guaranteed AI citations are outside this goal.
 The [plain-language user guide](../USER_GUIDE.md) explains review, publishing,
 rollback, costs and recovery.
 
-Each checkpoint must name changed files, test evidence and the next unresolved
-acceptance gate. Do not treat a mock transport test as the real browser rehearsal.
+This goal is complete for the bounded rehearsal and compatible release. The
+separate live-pilot prerequisites above are not waived by passing fixture tests.

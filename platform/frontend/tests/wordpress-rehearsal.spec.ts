@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { verifyPlatformRendering } from './wordpress-render-check'
 
 const source = 'https://consumer.ftc.gov/articles/0211-auto-repair-basics'
 // Adapted from the retained 2026-09-24 source-backed review trial. No model call,
@@ -94,6 +95,8 @@ test('real WordPress UI: check, schedule, publish once, render, retry and restor
   const publication = publications[0]
   expect(publication.result.public_status).toBe(200)
   expect(publication.result.evidence.sha256).toBeTruthy()
+  const renderJob = await verifyPlatformRendering(page, siteId, articleId, publication.result.url)
+  const renderJobId = renderJob.id
   const publicUrl = new URL(publication.result.url)
   expect(publicUrl.hostname).toBe('wordpress.fixture.test')
 
@@ -141,5 +144,5 @@ test('real WordPress UI: check, schedule, publish once, render, retry and restor
   const finalMetadata = await (await request.get('http://127.0.0.1:18082/__rehearsal')).json()
   expect(finalMetadata.scheduler_errors).toEqual([])
   expect(crashes).toEqual([])
-  await testInfo.attach('rehearsal-evidence', { body: JSON.stringify({ ...finalMetadata, site_id: siteId, article_id: articleId, publication_id: publication.id, remote_id: publication.remote_id, publish_job_id: firstJob.id, remote_count_after_retry: posts.length, remote_final_status: 'draft', published_evidence_sha256: publication.result.evidence.sha256 }, null, 2), contentType: 'application/json' })
+  await testInfo.attach('rehearsal-evidence', { body: JSON.stringify({ ...finalMetadata, site_id: siteId, article_id: articleId, publication_id: publication.id, remote_id: publication.remote_id, publish_job_id: firstJob.id, render_job_id: renderJobId, browser_screenshot_sha256: renderJob.result.screenshot_sha256, remote_count_after_retry: posts.length, remote_final_status: 'draft', published_evidence_sha256: publication.result.evidence.sha256 }, null, 2), contentType: 'application/json' })
 })
