@@ -1708,6 +1708,9 @@ async def _collect_openai_responses_web_search(
             "instructions": instructions,
             "tools": [{"type": "web_search", "search_context_size": context_size}],
             "tool_choice": "required",
+            # One visibility sample has one bounded search allowance. An
+            # uncapped tool loop could exceed its reserved per-question cost.
+            "max_tool_calls": 1,
             "include": ["web_search_call.action.sources"],
             "store": False,
             "max_output_tokens": output_limit,

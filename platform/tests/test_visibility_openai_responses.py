@@ -73,6 +73,7 @@ async def test_openai_responses_web_search_preserves_cited_answer_without_raw_pa
     assert body["model"] == "configured-model"
     assert body["input"] == "Who repairs windshields?"
     assert body["tools"] == [{"type": "web_search", "search_context_size": "low"}]
+    assert body["max_tool_calls"] == 1
     assert body["tool_choice"] == "required"
     assert body["include"] == ["web_search_call.action.sources"]
     assert body["store"] is False
