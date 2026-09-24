@@ -120,6 +120,27 @@ def _recover_full_cycle_stages(db, site, parent, instant):
         )
 
 
+def _recover_interrupted_publication(db, site, job, instant):
+    """Expose an interrupted write to the existing read-only reconciliation UI."""
+    if site is None or job.kind != 'publish':
+        return
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    article_id = payload.get('article_id')
+    if not isinstance(article_id, str):
+        return
+    publication = db.scalar(select(Publication).where(
+        Publication.site_id == site.id,
+        Publication.article_id == article_id,
+        Publication.operation_key == f'publish:{site.id}:{article_id}',
+        Publication.status.in_(_ACTIVE_PUBLICATION_STATUSES),
+    ))
+    if publication is not None:
+        publication.status = 'ambiguous'
+        publication.result = {**(publication.result or {}), 'status': 'ambiguous',
+                              'reason': 'worker_interrupted', 'job_id': job.id}
+        publication.updated_at = instant
+
+
 def _connection_capabilities(connection):
     capabilities = connection.capabilities if connection is not None else None
     return capabilities if isinstance(capabilities, dict) else {}
@@ -509,6 +530,7 @@ def schedule():
             job.available_at,job.lease_until = instant,None
             site = db.get(Site,job.site_id)
             event(db,site,'worker_interrupted',f'{job.kind} interrupted',{'job_id':job.id,'status':job.status})
+            _recover_interrupted_publication(db, site, job, instant)
             _recover_full_cycle_stages(db, site, job, instant)
         db.commit()
         for site in db.scalars(select(Site)):

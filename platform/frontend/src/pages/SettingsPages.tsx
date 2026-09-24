@@ -527,7 +527,11 @@ function BudgetLedger() {
   }
   return <Panel padded><h2>Provider cost reconciliation</h2><p className="text-small text-muted">If a provider does not return an actual charge, the maximum stays reserved. Reconcile it only from a provider invoice or usage record.</p>
     <ResourceStateView resource={resource} empty={<p>No cost ledger returned.</p>}>{data=><>
-      {data.reservations.items.length===0 ? <p>No paid work has been reserved.</p> : <ul>{data.reservations.items.map(row=><li key={row.id}>{row.status}: {formatCurrencyCents(row.actual_cents ?? row.estimated_cents)} {row.status==='reserved' ? '(reserved, not measured spending)' : '(actual charge)'}</li>)}</ul>}
+      {data.reservations.items.length===0 ? <p>No paid work has been reserved.</p> : <ul aria-label="Provider reservations">{data.reservations.items.map(row=><li key={row.id}>
+        {titleCase(row.status)} — reservation ceiling {formatCurrencyCents(row.estimated_cents)};
+        {' '}{row.status === 'reserved' ? `held ${formatCurrencyCents(row.estimated_cents)} (not measured spending)` : 'no longer held'};
+        {' '}actual charge: {row.actual_cents === null || row.actual_cents === undefined ? 'Unknown — not recorded' : formatCurrencyCents(row.actual_cents)}
+      </li>)}</ul>}
       {role==='owner' && data.reservations.items.some(row=>row.status==='reserved') && <form className="stack-sm" onSubmit={event=>void reconcile(event)}>
         <Field label="Reservation"><select required value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Choose a reservation</option>{data.reservations.items.filter(row=>row.status==='reserved').map(row=><option key={row.id} value={row.id}>{row.operation_key} — {formatCurrencyCents(row.estimated_cents)}</option>)}</select></Field>
         <Field label="Actual provider charge (cents)"><input type="number" min="0" step="1" required value={actual} onChange={event=>setActual(event.target.value)}/></Field>

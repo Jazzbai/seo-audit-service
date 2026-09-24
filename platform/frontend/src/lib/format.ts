@@ -3,7 +3,8 @@ export function formatNumber(value: number | undefined | null) {
 }
 
 export function formatCurrencyCents(value: number | undefined | null) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format((value ?? 0) / 100)
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 'Unknown'
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value / 100)
 }
 
 export function formatDate(value: string | undefined | null, fallback = 'Not yet observed') {

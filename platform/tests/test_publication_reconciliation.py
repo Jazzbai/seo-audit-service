@@ -168,6 +168,65 @@ def test_ambiguous_draft_reconciliation_is_read_only_and_resumable(platform, mon
         assert publication.result["status"] == "draft_reconciled"
 
 
+@pytest.mark.parametrize('mismatch', [False, True])
+def test_missing_draft_snapshot_matches_native_wordpress_metadata(mismatch):
+    article = Article(title='Fixture guide', body='<p>Facts.</p>', slug='fixture-guide', author_id='3')
+    current = {'title': article.title, 'body': article.body,
+               'metadata': {'slug': article.slug, 'author_id': 4 if mismatch else 3}}
+    assert workflows._publication_remote_matches(None, current, article, None) is (not mismatch)
+
+
+def test_full_snapshot_mismatch_cannot_fall_back_to_only_title_and_body():
+    article = Article(title='Fixture guide', body='<p>Facts.</p>', slug='fixture-guide', author_id='3')
+    current = {'title': article.title, 'body': article.body, 'slug': article.slug, 'author_id': '3'}
+
+    class Changed:
+        def matches_snapshot(self, *args, **kwargs): return False
+
+    assert not workflows._publication_remote_matches(Changed(), current, article, {'raw': {'excerpt': 'Earlier excerpt'}})
+
+
+def test_ui_publish_after_reconciliation_queues_one_linked_attempt_and_honors_pause(platform, monkeypatch):
+    client, factory, site_id = platform
+    article_id, publication_id = _seed_ambiguous(factory, site_id)
+    remote = ReadOnlyWordPress(draft=_remote_record(status='draft'))
+    _install_client(monkeypatch, remote)
+    with factory() as db:
+        original = Job(site_id=site_id, kind='publish', status='needs_reconciliation',
+                       payload={'article_id': article_id}, idempotency_key=f'{site_id}:publish:{article_id}')
+        db.add(original)
+        db.commit()
+        original_id = original.id
+    path = f'/api/v1/sites/{site_id}'
+    reconciliation = client.post(f'{path}/publications/{publication_id}/reconcile')
+    assert worker.run_job(reconciliation.json()['id'])['status'] == 'draft_reconciled'
+    resumed = client.post(f'{path}/articles/{article_id}/publish')
+    assert resumed.status_code == 202, resumed.text
+    resumed_id = resumed.json()['id']
+    assert resumed_id != original_id
+    assert resumed.json()['payload']['resumes_job_id'] == original_id
+    assert client.post(f'{path}/articles/{article_id}/publish').json()['id'] == resumed_id
+    assert worker.run_job(resumed_id) == {'status': 'held', 'reason': 'site_paused'}
+    assert remote.write_calls == 0
+    with factory() as db:
+        assert db.get(Job, original_id).status == 'needs_reconciliation'
+        assert len(db.scalars(select(Job).where(Job.kind == 'publish')).all()) == 2
+
+
+def test_held_reconciliation_can_be_checked_again_without_duplicate_active_reads(platform, monkeypatch):
+    client, factory, site_id = platform
+    _, publication_id = _seed_ambiguous(factory, site_id)
+    remote = ReadOnlyWordPress(error=ConnectorError('offline', transport_error=True))
+    _install_client(monkeypatch, remote)
+    path = f'/api/v1/sites/{site_id}/publications/{publication_id}/reconcile'
+    first = client.post(path).json()['id']
+    assert client.post(path).json()['id'] == first
+    assert worker.run_job(first)['status'] == 'held'
+    second = client.post(path).json()['id']
+    assert second != first
+    assert client.post(path).json()['id'] == second
+
+
 def test_published_reconciliation_verifies_public_state_and_closes_parent(platform, monkeypatch):
     client, factory, site_id = platform
     article_id, publication_id = _seed_ambiguous(factory, site_id, remote_id="7")

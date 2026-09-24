@@ -24,7 +24,7 @@ from app.db import SessionLocal, get_db
 from app.models import (Article, BudgetAccount, Candidate, Connection, Event, Finding,
                         Heartbeat, Incident, Job, Measurement, Page, Publication, Revision, Site)
 from app.models import CostReservation, Team
-from app.operations import (connection_view, enqueue, event, find_connection, global_controls,
+from app.operations import (connection_view, enqueue, enqueue_article_publish, event, find_connection, global_controls,
                             iso, monitoring_status, now, record)
 from app.policies import DEFAULT_POLICY, create_policy, current_policy
 
@@ -244,6 +244,40 @@ _JOB_SENSITIVE_KEY_PARTS = (
 )
 
 
+_USAGE_COUNT_FIELDS = frozenset({
+    "input_tokens", "output_tokens", "total_tokens", "prompt_tokens",
+    "completion_tokens", "cached_tokens", "reasoning_tokens", "audio_tokens",
+})
+_USAGE_DETAIL_FIELDS = frozenset({
+    "input_tokens_details", "output_tokens_details", "prompt_tokens_details",
+    "completion_tokens_details",
+})
+
+
+def _safe_usage_value(value: Any, *, depth: int) -> Any:
+    """Allow exact numeric metering fields only within a usage document.
+
+    Authentication tokens are still secrets, even if a provider puts them in
+    usage. Strings, bools, negative/unsafe counts and arbitrary token-like keys
+    never qualify for this exception to the normal browser redaction.
+    """
+    if depth > 16:
+        return "[redacted]"
+    if isinstance(value, list):
+        return [_safe_usage_value(item, depth=depth + 1) for item in value]
+    output = _safe_job_value(value, depth=depth)
+    if not isinstance(value, dict):
+        return output
+    for field in _USAGE_COUNT_FIELDS:
+        count = value.get(field)
+        if type(count) is int and 0 <= count <= 2**53 - 1:
+            output[field] = count
+    for field in _USAGE_DETAIL_FIELDS:
+        if isinstance(value.get(field), dict):
+            output[field] = _safe_usage_value(value[field], depth=depth + 1)
+    return output
+
+
 def _safe_job_value(value: Any, *, depth: int = 0) -> Any:
     """Keep job progress useful without reflecting credential-shaped JSON."""
 
@@ -254,7 +288,9 @@ def _safe_job_value(value: Any, *, depth: int = 0) -> Any:
         for key, nested in value.items():
             normalized = str(key).casefold().replace("-", "_")
             compact = normalized.replace("_", "")
-            if any(part in normalized or part.replace("_", "") in compact
+            if normalized == "usage" and isinstance(nested, (dict, list)):
+                output[key] = _safe_usage_value(nested, depth=depth + 1)
+            elif any(part in normalized or part.replace("_", "") in compact
                    for part in _JOB_SENSITIVE_KEY_PARTS):
                 output[key] = "[redacted]"
             else:
@@ -816,8 +852,13 @@ def schedule(site_id: str, article_id: str, payload: Schedule, ctx=Depends(requi
 @router.post('/sites/{site_id}/articles/{article_id}/publish', status_code=202)
 def publish_article(site_id: str, article_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, write=True)
-    own(db, Article, article_id, site_id)
-    return enqueue_response(db, site, 'publish', {'article_id': article_id}, f'publish:{article_id}')
+    article = own(db, Article, article_id, site_id)
+    if article.status == 'rolled_back':
+        raise HTTPException(409, 'This publication was rolled back. Review a new article operation before publishing again.')
+    try:
+        return _job_view(enqueue_article_publish(db, site, article_id, requested_by=ctx['user_id']), include_idempotency_key=True)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post('/sites/{site_id}/articles/{article_id}/rollback', status_code=202)
@@ -837,12 +878,20 @@ def reconcile_publication_action(site_id: str, publication_id: str, ctx=Depends(
 
     if not _publication_requires_reconciliation(publication):
         raise HTTPException(409, 'This publication does not require reconciliation')
+    # A failed/held read is not a permanent answer. Reuse an active check, then
+    # permit a new read after the publication's last recorded observation.
+    for active in db.scalars(select(Job).where(
+        Job.site_id == site_id, Job.kind == 'reconcile_publication',
+        Job.status.in_(('queued', 'running', 'retry')),
+    )):
+        if active.payload == {'publication_id': publication.id}:
+            return _job_view(active, include_idempotency_key=True)
     return enqueue_response(
         db,
         site,
         'reconcile_publication',
         {'publication_id': publication.id},
-        f'reconcile-publication:{publication.id}',
+        f'reconcile-publication:{publication.id}:{iso(publication.updated_at)}',
     )
 
 

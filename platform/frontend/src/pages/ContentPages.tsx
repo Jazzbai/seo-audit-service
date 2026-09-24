@@ -7,6 +7,7 @@ import { formatDate, formatDateTime, fromDateTimeLocal, titleCase, toDateTimeLoc
 import type { Article, CheckResult, Connection, ContentAutopilotResult, GlobalSettings, PageRecord, Policy, Revision, Site } from '../types'
 import { ResourceStateView, useResource, useSiteId } from './shared'
 import { useAuth } from '../context/AppContext'
+import { ProviderUsagePanel } from '../components/ProviderUsagePanel'
 
 const IMAGE_SOURCE_KINDS = ['owner_provided', 'licensed', 'generated_illustration'] as const
 type ImageSourceKind = typeof IMAGE_SOURCE_KINDS[number]
@@ -579,9 +580,16 @@ export function ArticleEditorPage() {
     return Array.from(values, ([id, name]) => ({ id, name }))
   }, [resource.data])
   const authorIsVerified = !authorId || verifiedAuthors.some((author) => author.id === authorId)
+  const recordMatchesRoute = Boolean(resource.data && (existingId
+    ? resource.data.article?.id === existingId
+    : resource.data.article === null))
+  const editorReady = recordMatchesRoute && initializedFor === (existingId ?? 'new')
 
   useEffect(() => {
-    if (!resource.data || initializedFor === (existingId ?? 'new')) return
+    // useResource retains the previous route's data while the next read loads.
+    // Never mark /articles/:id initialized using /new's null article (or a
+    // different article), which would blank the form and suppress real hydration.
+    if (!resource.data || !recordMatchesRoute || initializedFor === (existingId ?? 'new')) return
     const article = resource.data.article
     setTitle(article?.title ?? '')
     setBody(article?.body ?? '')
@@ -594,7 +602,7 @@ export function ArticleEditorPage() {
     setAuthorId(article?.author_id ?? '')
     setScheduledAt(toDateTimeLocal(article?.scheduled_at))
     setInitializedFor(existingId ?? 'new')
-  }, [existingId, initializedFor, resource.data])
+  }, [existingId, initializedFor, resource.data, recordMatchesRoute])
 
   useEffect(() => {
     setCheck(persistedCheck(resource.data?.article))
@@ -614,6 +622,7 @@ export function ArticleEditorPage() {
 
   async function save(event?: FormEvent) {
     event?.preventDefault()
+    if (!editorReady) { setError('Wait for the selected article to load before saving.'); return }
     if (!canEdit) {
       setError('Editor access is required to change or publish articles.')
       return
@@ -707,11 +716,12 @@ export function ArticleEditorPage() {
       <PageHeader eyebrow={existingId ? 'Content / Editor' : 'Content / New article'} title={existingId ? (title || 'Untitled article') : 'New article'} description={existingId ? 'Edit the stored source, check it against business facts, then choose when the API may act.' : 'Start with a grounded brief. Save before asking the API to check or schedule anything.'} actions={<Link className="button button-secondary" to={`/sites/${siteId}/content`}><ArrowLeft size={15} /> Back to calendar</Link>} />
       {message && <div className="mb-20"><Notice kind="success">{message}</Notice></div>}{error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}
       {!canEdit && <div className="mb-20"><Notice kind="warning" title="Read-only for your role">Viewer access can review article state, but editor access is required to save, check, schedule, publish, or roll back content.</Notice></div>}
-      <fieldset disabled={!canEdit} style={{ border: 0, padding: 0, margin: 0 }}>
+      <fieldset disabled={!canEdit || !editorReady} style={{ border: 0, padding: 0, margin: 0 }}>
       <div className="editor-layout">
         <Panel className="editor-card"><form onSubmit={(event) => void save(event)}><div className="stack-sm"><Field label="Title" required><input className="editor-title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="A clear, complete article title" /></Field><div className="form-grid"><Field label="Target keyword"><input value={briefKeyword} onChange={(event) => setBriefKeyword(event.target.value)} placeholder="Optional, grounded keyword" /></Field><Field label="Publishing author" hint={verifiedAuthors.length ? 'Only authors returned by the authenticated WordPress connection can be selected.' : 'Test WordPress to load authors, or leave this blank for a review-only draft.'}><select aria-label="Publishing author" value={authorId} onChange={(event) => setAuthorId(event.target.value)}><option value="">No author selected</option>{authorId && !authorIsVerified && <option value={authorId}>Unverified configured author ({authorId})</option>}{verifiedAuthors.map((author) => <option key={author.id} value={author.id}>{author.name} ({author.id})</option>)}</select></Field><Field label="Editorial angle" hint="What useful question should this answer?"><textarea value={briefAngle} onChange={(event) => setBriefAngle(event.target.value)} placeholder="Describe the reader's need and the useful answer." /></Field><Field label="Outline" hint="Stored as brief metadata for review."><textarea value={briefOutline} onChange={(event) => setBriefOutline(event.target.value)} placeholder="H2s or the shape of the answer" /></Field><Field label="Sources" hint="One URL or source reference per line." ><textarea value={sources} onChange={(event) => setSources(event.target.value)} placeholder="https://example.com/confirmed-source" /></Field></div>{authorId && !authorIsVerified && <Notice kind="warning">This author is not verified by the current WordPress connection. Clear it or test the connection before saving.</Notice>}<Field label="Body" hint="The API checks the stored body for provenance, completeness, and policy before publication."><textarea className="editor-body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write or paste the article body here…" /></Field></div><div className="editor-footer"><span className="text-small text-muted">{existingId ? `Last saved ${formatDateTime(resource.data?.article?.updated_at)}` : 'Not saved yet'}</span><div className="editor-actions"><Button variant="secondary" type="submit" disabled={saving}><Save size={15} /> {saving ? 'Saving…' : 'Save article'}</Button>{existingId && <Button variant="ghost" type="button" onClick={() => void runCheck()} disabled={saving}><ShieldAlert size={15} /> Check</Button>}</div></div></form></Panel>
         <div className="stack">
           {existingId && <Panel padded><div className="stack-sm"><strong>Connected draft generation</strong><span className="text-small text-muted">Research, provider cost, and editorial checks are recorded before a draft can be scheduled.</span><Button variant="secondary" onClick={() => void generate()} disabled={saving || role === 'viewer'}><Sparkles size={14} /> Generate draft</Button></div></Panel>}
+          {existingId && <ProviderUsagePanel brief={resource.data?.article?.brief} siteId={siteId} />}
           <ImageProvenanceEditor records={imageSources} onChange={setImageSources} />
           {existingId && <PlanningGuidancePanel brief={resource.data?.article?.brief} />}
           {existingId && <ImageProvenancePlanningPanel brief={resource.data?.article?.brief} />}

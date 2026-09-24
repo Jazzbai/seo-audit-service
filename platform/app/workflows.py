@@ -2551,13 +2551,11 @@ def _publication_remote_matches(
 
     if expected:
         try:
-            if client.matches_snapshot(current, expected, ignore_status=True):
-                return True
+            return bool(client.matches_snapshot(current, expected, ignore_status=True))
         except Exception:
-            # A connector-specific snapshot shape may be unavailable for an
-            # imported/legacy row. The bounded normalized comparison below is
-            # still required before accepting any remote outcome.
-            pass
+            # An available snapshot must match in full. A malformed/legacy
+            # snapshot needs review, not a weaker comparison of fewer fields.
+            return False
 
     expected_values = {
         'title': article.title,
@@ -2568,9 +2566,10 @@ def _publication_remote_matches(
     for field, value in expected_values.items():
         if value in (None, ''):
             continue
-        actual = current.get(field)
+        metadata = current.get('metadata') if isinstance(current.get('metadata'), dict) else {}
+        actual = current.get(field, metadata.get(field))
         if field == 'author_id':
-            actual = current.get('author_id', current.get('author'))
+            actual = current.get('author_id', current.get('author', metadata.get('author_id')))
         if str(actual or '') != str(value):
             return False
     return bool(expected_values['title'] and expected_values['body'])
@@ -2840,6 +2839,7 @@ async def reconcile_publication(db, site, job):
         # still required for the next remote write.
         article.status = 'checked'
         publication.status = 'preparing'
+        publication.snapshot = {**publication.snapshot, 'reconciliation_job_id': job.id}
         publication.result = {
             'status': 'draft_reconciled',
             'next_action': 'resume_publication',
@@ -2876,12 +2876,49 @@ async def reconcile_publication(db, site, job):
     )
 
 
+def publication_target(site, article, source=None):
+    """Resolve a new post's policy target without treating a draft preview as its permalink.
+
+    WordPress edit-context responses expose the sample permalink and unique
+    generated slug. Unknown templates or off-site targets must stay in draft.
+    """
+    if source is None:
+        slug = article.slug
+        if not isinstance(slug, str) or not slug.strip():
+            raise ValueError('Publication target is unknown; select an article slug')
+        url = site.origin.rstrip('/') + '/' + slug.lstrip('/')
+    else:
+        raw = source.get('raw') if isinstance(source.get('raw'), dict) else {}
+        template = raw.get('permalink_template')
+        url = template if template else source.get('url')
+        if isinstance(url, str) and '%postname%' in url:
+            slug = raw.get('generated_slug')
+            if not isinstance(slug, str) or not slug.strip():
+                raise ValueError('Publication permalink slug is unknown; keep the article in draft')
+            url = url.replace('%postname%', slug)
+    if not isinstance(url, str) or not url.strip() or re.search(r'%[a-z_]+%', url, re.I):
+        raise ValueError('Publication permalink is unknown; keep the article in draft')
+    try:
+        parsed, origin = urlsplit(url), urlsplit(site.origin)
+        same_origin = (parsed.scheme, parsed.hostname, parsed.port or 443) == (origin.scheme, origin.hostname, origin.port or 443)
+    except ValueError as exc:
+        raise ValueError('Publication permalink is invalid') from exc
+    if not same_origin or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError('Publication permalink is outside the connected site')
+    # New, platform-managed articles are enrolled by policy; imported/existing
+    # content must take the separate explicit-enrollment refresh workflow.
+    return {'url': url, 'enrolled': article.managed}
+
+
 async def publish(db, site, job):
     from app.intelligence.content import check_article
     article = scoped(db, Article, job.payload.get('article_id'), site)
     if isinstance(article.brief,dict) and article.brief.get('purpose') == 'refresh_existing':
         return await apply_refresh(db, site, job, article)
-    policy = authorize(db, site, 'publish')
+    # Report emergency/policy holds before resolving a potentially incomplete
+    # article target; neither path is allowed to open the connector.
+    authorize(db, site, 'publish')
+    policy = authorize(db, site, 'publish', publication_target(site, article))
     op_key = f'publish:{site.id}:{article.id}'
     pub = publication(db, site, op_key, policy, article=article)
     if pub.status == 'published':
@@ -2916,7 +2953,7 @@ async def publish(db, site, job):
     db.commit()
     async with await client_for(db, site) as client:
         try:
-            authorize(db, site, 'publish')
+            authorize(db, site, 'publish', publication_target(site, article))
             if pub.remote_id:
                 draft = await client.read('posts:' + pub.remote_id)
             else:
@@ -2931,7 +2968,7 @@ async def publish(db, site, job):
                 article.remote_id = pub.remote_id
                 pub.snapshot = {**pub.snapshot,'draft':draft}
                 db.commit()
-            authorize(db, site, 'publish')
+            authorize(db, site, 'publish', publication_target(site, article, draft))
             captured_draft=pub.snapshot.get('draft')
             if not captured_draft or not client.matches_snapshot(draft,captured_draft,ignore_status=True):
                 raise SourceConflict(captured_draft.get('source_hash') if captured_draft else 'missing_snapshot',draft['source_hash'],resource_key=draft['resource_key'])

@@ -10,7 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
-from app.models import Connection, Event, Heartbeat, Incident, Job, Site
+from app.models import Article, Connection, Event, Heartbeat, Incident, Job, Publication, Site
 
 
 SCHEDULER_STALE_AFTER_SECONDS = 150
@@ -401,6 +401,92 @@ def enqueue(db, site, kind: str, payload: dict | None = None,
     )
     db.commit()
     return row
+
+
+def enqueue_article_publish(db, site, article_id: str, *, requested_by: str | None = None) -> Job:
+    """Replay the one article operation without replacing scheduler provenance.
+
+    Failed/uncertain work is never blindly retried. After successful read-only
+    reconciliation, an explicit request can create a distinct, linked attempt;
+    the original job and remote operation identity are preserved.
+    """
+    key = f"{site.id}:publish:{article_id}"
+
+    def existing():
+        row = db.scalar(select(Job).where(Job.idempotency_key == key))
+        if row is None:
+            return None
+        payload = row.payload
+        valid = payload == {"article_id": article_id}
+        if isinstance(payload, dict) and set(payload) == {"article_id", "authorization", "policy_version"}:
+            version = payload.get("policy_version")
+            valid = (
+                payload.get("article_id") == article_id
+                and type(version) is int and version > 0
+                and payload.get("authorization") == {
+                    "type": "policy", "action": "publish", "policy_version": version,
+                }
+            )
+        if row.site_id != site.id or row.kind != "publish" or not valid:
+            raise ValueError("Idempotency key already belongs to different work")
+        publication = db.scalar(select(Publication).where(
+            Publication.site_id == site.id,
+            Publication.article_id == article_id,
+            Publication.operation_key == f'publish:{site.id}:{article_id}',
+        ))
+        if publication is None:
+            return row
+        snapshot = publication.snapshot if isinstance(publication.snapshot, dict) else {}
+        reconciliation_id = snapshot.get('reconciliation_job_id')
+        if not isinstance(reconciliation_id, str):
+            return row
+        reconciliation = db.get(Job, reconciliation_id)
+        result = reconciliation.result if reconciliation is not None and isinstance(reconciliation.result, dict) else {}
+        if (reconciliation is None or reconciliation.site_id != site.id
+                or reconciliation.kind != 'reconcile_publication'
+                or reconciliation.status not in ('complete', 'partial')
+                or reconciliation.payload != {'publication_id': publication.id}
+                or result.get('status') != 'draft_reconciled'
+                or result.get('publication_id') != publication.id
+                or result.get('article_id') != article_id):
+            raise ValueError('Publication recovery evidence requires review')
+        resume_key = f'publish:{article_id}:resume:{reconciliation_id}'
+        resume_payload = {'article_id': article_id, 'resumes_job_id': row.id,
+                          'reconciliation_job_id': reconciliation_id}
+        resumed = db.scalar(select(Job).where(Job.idempotency_key == f'{site.id}:{resume_key}'))
+        if resumed is not None:
+            if resumed.site_id != site.id or resumed.kind != 'publish' or resumed.payload != resume_payload:
+                raise ValueError('Conflicting publication recovery job')
+            return resumed
+        article = db.get(Article, article_id)
+        if (row.status not in ('needs_reconciliation', 'failed', 'blocked')
+                or publication.status != 'preparing'
+                or not isinstance(publication.result, dict)
+                or publication.result.get('status') != 'draft_reconciled'
+                or article is None or article.site_id != site.id or article.status != 'checked'
+                or not publication.remote_id or not snapshot.get('draft')):
+            return row
+        # A new durable job is safe only after remote identity is known. Worker
+        # policy, editorial, freshness and source checks still run in full.
+        resumed = enqueue(db, site, 'publish', resume_payload, resume_key)
+        event(db, site, 'publication_resume_requested', 'Explicit publication resume requested',
+              {'job_id': resumed.id, 'publication_id': publication.id,
+               'previous_job_id': row.id, 'user_id': requested_by})
+        db.commit()
+        return resumed
+
+    row = existing()
+    if row is not None:
+        return row
+    try:
+        return enqueue(db, site, "publish", {"article_id": article_id}, f"publish:{article_id}")
+    except ValueError:
+        # The scheduler can win the insert after the first read. Re-read the
+        # canonical operation and apply exactly the same site/payload checks.
+        row = existing()
+        if row is None:
+            raise
+        return row
 
 
 def find_connection(db, site_id: str, kind: str):

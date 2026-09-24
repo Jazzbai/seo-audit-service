@@ -34,7 +34,7 @@ def test_edit_keeps_provider_provenance_and_research(platform):
     assert 'research_review_required' in checked['blockers']
 
 
-@pytest.mark.parametrize('change', ['roundtrip', 'omit', 'rewrite'])
+@pytest.mark.parametrize('change', ['roundtrip', 'legacy_redacted', 'omit', 'rewrite'])
 def test_editor_brief_cannot_overwrite_provider_usage_or_source_history(platform, change):
     client, factory, site_id = platform
     original = {
@@ -50,8 +50,10 @@ def test_editor_brief_cannot_overwrite_provider_usage_or_source_history(platform
         article_id = article.id
     path = f'/api/v1/sites/{site_id}/articles/{article_id}'
     brief = client.get(path).json()['brief']
-    assert brief['generation']['usage']['input_tokens'] == '[redacted]'
-    if change == 'omit':
+    assert brief['generation']['usage']['input_tokens'] == 120
+    if change == 'legacy_redacted':
+        brief['generation']['usage']['input_tokens'] = '[redacted]'
+    elif change == 'omit':
         brief.pop('generation')
     elif change == 'rewrite':
         brief['generation'] = {'kind': 'authenticated_editor', 'unverified_sources': []}

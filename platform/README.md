@@ -7,6 +7,8 @@ See the [candidate acceptance matrix](docs/CANDIDATE_ACCEPTANCE.md) for this bou
 
 **This is not yet the complete pilot release. Do not activate unattended live publishing.** See [readiness](docs/READINESS.md) for the remaining acceptance gates. New installations and restored sites start paused.
 
+For an existing deployed workspace, use the [review and controlled-publishing user guide](docs/USER_GUIDE.md).
+
 ## Local verification
 
 From this repository in PowerShell:
