@@ -179,7 +179,7 @@ select { min-height: 40px; }
 /* Tables */
 .table-wrap { overflow-x: auto; width: 100%; }
 table { border-collapse: collapse; width: 100%; min-width: 650px; }
-th { text-align: left; color: #7b858d; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 780; white-space: nowrap; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #fbfbf8; }
+th { text-align: left; color: #626d75; font-size: .65rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 780; white-space: nowrap; padding: 11px 16px; border-bottom: 1px solid var(--line); background: #fbfbf8; }
 td { color: #344252; font-size: .8rem; padding: 16px; border-bottom: 1px solid #eeeee9; vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: #fdfdfa; }

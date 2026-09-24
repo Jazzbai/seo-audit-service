@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
 
 const auth = {
   user: { id: 'user-1', email: 'owner@example.com', name: 'Alex Owner' },
@@ -149,6 +150,21 @@ async function installWorkspaceMocks(page: Page, options: { initialized?: boolea
     jobRequests,
     connectionSaves,
   }
+}
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
+  test(`populated page table meets WCAG contrast at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport)
+    await installWorkspaceMocks(page, { pages: [{
+      id: 'page-1', site_id: site.id, title: 'Design services', url: `${site.origin}/services/`,
+      resource_type: 'pages', enrolled: false, last_seen_at: new Date().toISOString(), signals: {},
+    }] })
+    await page.goto('/sites/site-1/pages')
+    await expect(page.getByRole('columnheader', { name: 'Page', exact: true })).toBeVisible()
+    const scan = await new AxeBuilder({ page }).include('table').withRules(['color-contrast']).analyze()
+    expect(scan.violations).toEqual([])
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
+  })
 }
 
 test('mocked API: owner can sign in and see returned overview data', async ({ page }) => {
