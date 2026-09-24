@@ -226,6 +226,8 @@ export const articlesApi = {
   update: (siteId: string, articleId: string, body: Record<string, unknown>) => request<Article>(`/sites/${encode(siteId)}/articles/${encode(articleId)}`, { method: 'PATCH', body }),
   revisions: (siteId: string, articleId: string) => list<Revision>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/revisions`),
   check: (siteId: string, articleId: string) => request<CheckResult>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/check`, { method: 'POST', body: {} }),
+  reviewSource: (siteId: string, articleId: string, body: { url: string; notes: string; expected_updated_at: string; confirms_claim_support: boolean }) =>
+    request<Article>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/source-reviews`, { method: 'POST', body }),
   schedule: (siteId: string, articleId: string, scheduled_at: string) => request<Article>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/schedule`, { method: 'POST', body: { scheduled_at } }),
   publish: (siteId: string, articleId: string) => request<Job>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/publish`, { method: 'POST', body: {} }),
   rollback: (siteId: string, articleId: string) => request<Job>(`/sites/${encode(siteId)}/articles/${encode(articleId)}/rollback`, { method: 'POST', body: {} }),

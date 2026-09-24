@@ -143,6 +143,13 @@ class Enrollment(Input):
     enrolled: bool
 
 
+class SourceReviewInput(Input):
+    url: str = Field(min_length=8, max_length=2048)
+    notes: str = Field(min_length=30, max_length=2000)
+    expected_updated_at: datetime
+    confirms_claim_support: bool = Field(strict=True)
+
+
 class Decision(Input):
     decision: str
 
@@ -336,7 +343,11 @@ def candidate_view(value: Candidate) -> dict:
 
 
 def article_view(value: Article) -> dict:
-    return _browser_record(value, "brief", "sources")
+    from app.source_reviews import reviewed_source_urls
+    result = _browser_record(value, "brief", "sources")
+    result['source_review_state'] = {'accepted_urls': sorted(reviewed_source_urls(record(value))),
+                                     'valid_for_days': 7}
+    return result
 
 
 def incident_view(value: Incident) -> dict:
@@ -586,6 +597,11 @@ def policy(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
 @router.put("/sites/{site_id}/policy")
 def save_policy(site_id: str, payload: PolicyInput, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, owner=True)
+    scope = payload.settings.get('publication_article_ids')
+    if isinstance(scope, list) and all(isinstance(value, str) for value in scope):
+        existing = set(db.scalars(select(Article.id).where(Article.site_id == site_id, Article.id.in_(scope))))
+        if set(scope) - existing:
+            raise HTTPException(422, 'Every selected article must belong to this site')
     try:
         row = create_policy(db, site, ctx['user_id'], payload.settings)
     except ValueError as exc:
@@ -751,6 +767,8 @@ def get_job(site_id: str, job_id: str, ctx=Depends(require_user), db=Depends(get
 @router.post('/sites/{site_id}/articles', status_code=201)
 def add_article(site_id: str, payload: ArticleInput, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, write=True)
+    if 'source_reviews' in payload.brief:
+        raise HTTPException(422, 'Source reviews must be recorded through the source-review workflow')
     import re
     slug = re.sub(r'[^a-z0-9]+', '-', payload.title.lower()).strip('-')[:120]
     article = Article(site_id=site_id, title=payload.title, slug=slug, brief=payload.brief,
@@ -776,6 +794,11 @@ def edit_article(site_id: str, article_id: str, payload: ArticlePatch, ctx=Depen
     db.add(Revision(site_id=site_id, article_id=article.id, body=article.body, title=article.title, reason='editor_save'))
     for key, value in payload.model_dump(exclude_unset=True).items():
         if key == 'brief':
+            # This audit ledger is server-owned. A browser round trip can carry
+            # it, but cannot create, replace, erase or revive an attestation.
+            value = {k: v for k, v in (value or {}).items() if k != 'source_reviews'}
+            if 'source_reviews' in (article.brief or {}):
+                value['source_reviews'] = article.brief['source_reviews']
             generation = (article.brief or {}).get('generation')
             if isinstance(generation, dict) and generation.get('kind') in ('provider_generation', 'provider_draft'):
                 # Browser responses redact token-shaped fields. An editor save
@@ -828,6 +851,70 @@ def check_draft(site_id: str, article_id: str, ctx=Depends(require_user), db=Dep
     result = check(db, site, article)
     db.commit()
     return result
+
+
+@router.post('/sites/{site_id}/articles/{article_id}/source-reviews')
+async def review_article_source(site_id: str, article_id: str, payload: SourceReviewInput,
+                                ctx=Depends(require_user), db=Depends(get_db)):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app import network
+    from app.source_reviews import review_fingerprint, source_url
+    from app.workflows import capture_html
+
+    site = guard(db, ctx, site_id, write=True)
+    article = own(db, Article, article_id, site_id)
+    if article.status in ('publishing', 'verifying', 'published', 'scheduled'):
+        raise HTTPException(409, 'Source review requires an unscheduled draft')
+    if utc(payload.expected_updated_at) != article.updated_at:
+        raise HTTPException(409, 'The draft changed; reload before reviewing its sources')
+    if payload.confirms_claim_support is not True or len(payload.notes.strip()) < 30:
+        raise HTTPException(422, 'Read the source and explain which claims or link purpose it supports')
+    brief = article.brief or {}
+    generation = brief.get('generation') or {}
+    candidates = [*(article.sources or []), *(generation.get('unverified_sources') or []),
+                  *(brief.get('sources') or [])]
+    url = source_url(payload.url)
+    if not url or url not in {source_url(value) for value in candidates}:
+        raise HTTPException(422, 'Select an existing article source or a flagged source')
+    before = review_fingerprint(record(article))
+    try:
+        observation = await asyncio.wait_for(network.fetch(url), timeout=25)
+    except Exception:
+        raise HTTPException(422, 'Source could not be safely fetched; no review was recorded') from None
+    if observation['status_code'] != 200 or 'text/html' not in observation.get('headers', {}).get('content-type', '').lower():
+        raise HTTPException(422, 'Source must return successful HTML; no review was recorded')
+
+    # Fetching is read-only but can take time. Recheck the current locked row,
+    # not the stale identity-map instance, before attaching editorial authority.
+    db.expire(article)
+    article = db.scalar(select(Article).where(Article.id == article_id, Article.site_id == site_id)
+                        .with_for_update().execution_options(populate_existing=True))
+    if (article is None or utc(payload.expected_updated_at) != article.updated_at
+            or review_fingerprint(record(article)) != before
+            or article.status in ('publishing', 'verifying', 'published', 'scheduled')):
+        raise HTTPException(409, 'The draft changed during verification; review the latest version')
+    review_id = uuid4().hex
+    evidence = capture_html(site, SimpleNamespace(id=review_id), observation['url'], observation['html'], 'source_review')
+    evidence.pop('job_id', None)
+    evidence['review_id'] = review_id
+    review = {'id': review_id, 'kind': 'authenticated_source_review',
+              'url': url, 'fetched_url': observation['url'], 'http_status': 200,
+              'content_sha256': evidence['sha256'], 'evidence': evidence,
+              'article_fingerprint': before, 'decision': 'accepted_for_this_revision',
+              'notes': payload.notes.strip(), 'reviewer_id': ctx['user_id'], 'reviewed_at': iso(now())}
+    ledger = list((article.brief or {}).get('source_reviews', []))
+    if len(ledger) >= 100:
+        raise HTTPException(409, 'Source-review history limit reached; retain history and request support')
+    article.brief = {**(article.brief or {}), 'source_reviews': [*ledger, review]}
+    article.checks = {}
+    article.status = 'checking'
+    article.updated_at = now()
+    event(db, site, 'article_source_reviewed', 'Source reviewed for the saved article revision',
+          {'article_id': article.id, 'review_id': review_id})
+    check(db, site, article)
+    db.commit()
+    return article_view(article)
 
 
 @router.post('/sites/{site_id}/articles/{article_id}/schedule')

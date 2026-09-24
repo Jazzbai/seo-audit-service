@@ -592,6 +592,9 @@ def schedule():
                     # the autopilot gate below still rejects an invalid policy.
                     posts_per_week = 2
                 for article in db.scalars(select(Article).where(Article.site_id == site.id,Article.status.in_(['checked','scheduled'])).order_by(Article.created_at)):
+                    scope = cfg.get('publication_article_ids')
+                    if scope is not None and article.id not in scope:
+                        continue
                     if article.status == 'checked' and local.weekday() in cfg.get('publish_days',[1,4]) and local.hour >= 9:
                         article.scheduled_at,article.status = instant,'scheduled'
                     if article.status == 'scheduled' and article.scheduled_at and article.scheduled_at <= instant:
@@ -631,6 +634,7 @@ def schedule():
                 autopilot_window = _local_publish_window(site, cfg, instant)
                 autopilot_ready = (
                     autopilot_window is not None
+                    and cfg.get('publication_article_ids') is None
                     and publish_authorization is not None
                     and _automatic_publish_policy_ready(
                         site, policy, global_pause=global_pause,

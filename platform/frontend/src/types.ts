@@ -168,6 +168,7 @@ export interface Article {
   status: 'planned' | 'drafting' | 'checking' | 'checked' | 'review_needed' | 'scheduled' | 'publishing' | 'verifying' | 'published' | 'failed' | 'rolled_back' | string
   brief?: Record<string, unknown>
   checks?: CheckResult | null
+  source_review_state?: { accepted_urls: string[]; valid_for_days: number }
   sources: Array<Record<string, unknown> | string>
   author_id?: string | null
   scheduled_at?: string | null
@@ -358,6 +359,7 @@ export interface Policy {
 
 export interface PolicySettings {
   enabled: boolean
+  publication_article_ids?: string[] | null
   allowed_actions: string[]
   protected_paths: string[]
   posts_per_week: number

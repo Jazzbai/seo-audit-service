@@ -1600,6 +1600,8 @@ def _content_autopilot_preflight(db, site) -> dict[str, Any]:
         None,
         global_pause=bool(controls.get('global_pause')),
     ))
+    if policy and policy.settings.get('publication_article_ids') is not None:
+        blockers.append('restricted_publication_scope')
     wordpress = find_connection(db, site.id, 'wordpress')
     wordpress_credentials = False
     if wordpress is None or wordpress.status == 'revoked' or not wordpress.encrypted_credentials:
@@ -2907,7 +2909,10 @@ def publication_target(site, article, source=None):
         raise ValueError('Publication permalink is outside the connected site')
     # New, platform-managed articles are enrolled by policy; imported/existing
     # content must take the separate explicit-enrollment refresh workflow.
-    return {'url': url, 'enrolled': article.managed}
+    target = {'url': url, 'enrolled': article.managed}
+    if article.id:
+        target['article_id'] = article.id
+    return target
 
 
 async def publish(db, site, job):

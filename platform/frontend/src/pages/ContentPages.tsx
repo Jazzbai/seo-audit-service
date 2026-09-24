@@ -8,6 +8,7 @@ import type { Article, CheckResult, Connection, ContentAutopilotResult, GlobalSe
 import { ResourceStateView, useResource, useSiteId } from './shared'
 import { useAuth } from '../context/AppContext'
 import { ProviderUsagePanel } from '../components/ProviderUsagePanel'
+import { SourceReviewPanel } from '../components/SourceReviewPanel'
 
 const IMAGE_SOURCE_KINDS = ['owner_provided', 'licensed', 'generated_illustration'] as const
 type ImageSourceKind = typeof IMAGE_SOURCE_KINDS[number]
@@ -722,6 +723,7 @@ export function ArticleEditorPage() {
         <div className="stack">
           {existingId && <Panel padded><div className="stack-sm"><strong>Connected draft generation</strong><span className="text-small text-muted">Research, provider cost, and editorial checks are recorded before a draft can be scheduled.</span><Button variant="secondary" onClick={() => void generate()} disabled={saving || role === 'viewer'}><Sparkles size={14} /> Generate draft</Button></div></Panel>}
           {existingId && <ProviderUsagePanel brief={resource.data?.article?.brief} siteId={siteId} />}
+          {resource.data?.article && <SourceReviewPanel siteId={siteId} article={resource.data.article} onReviewed={async () => { await resource.reload() }} disabled={saving || !canEdit || title !== resource.data.article.title || body !== resource.data.article.body || sources !== resource.data.article.sources.map(source => typeof source === 'string' ? source : JSON.stringify(source)).join('\n')} />}
           <ImageProvenanceEditor records={imageSources} onChange={setImageSources} />
           {existingId && <PlanningGuidancePanel brief={resource.data?.article?.brief} />}
           {existingId && <ImageProvenancePlanningPanel brief={resource.data?.article?.brief} />}

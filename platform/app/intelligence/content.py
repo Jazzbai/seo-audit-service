@@ -1391,7 +1391,11 @@ def check_article(
     ):
         blockers.append("missing_provenance")
     elif provenance.get("unverified_sources"):
-        blockers.append("unverified_sources")
+        from app.source_reviews import reviewed_source_urls, source_url
+        reviewed = reviewed_source_urls(article)
+        if any(not source_url(value) or source_url(value) not in reviewed
+               for value in _items(provenance.get("unverified_sources"))):
+            blockers.append("unverified_sources")
 
     research_records: list[dict[str, Any]] = []
     for key in ("research", "research_brief"):

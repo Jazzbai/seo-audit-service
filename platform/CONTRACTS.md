@@ -4,6 +4,27 @@ Standalone application, no imports or runtime connections to Business Optimizer 
 
 ## Shared stack and ownership
 
+### Controlled-pilot additions (2026-09-24)
+
+- Optional policy `publication_article_ids`: null/omitted retains the legacy
+  unrestricted-by-ID behavior; an empty list blocks all publications; otherwise
+  only selected site-owned articles may publish. Existing pause/action/protected
+  path/enrollment/author/quota checks remain mandatory. Restricted scopes disable
+  content-autopilot creation and filter scheduled article dispatch.
+- `POST /api/v1/sites/{site}/articles/{article}/source-reviews` is editor/owner,
+  CSRF-protected and site-scoped. Input: `url`, `notes` (30–2000 characters),
+  `expected_updated_at`, and strict boolean `confirms_claim_support=true`.
+  Only an unscheduled saved draft's existing/flagged sources are selectable.
+  The server fetches bounded public HTML through the DNS-pinned transport,
+  rejects unsuccessful/non-HTML results, and rechecks the locked article before
+  recording review identity/time, evidence and a revision fingerprint. It makes
+  no provider request or WordPress write. Concurrent changes return 409.
+- Server-owned `brief.source_reviews` preserves original generation evidence and
+  is not writable through article create/patch. Reviews are revision-bound and
+  expire after seven days. Article responses expose computed
+  `source_review_state.accepted_urls`; a flag is cleared only when every flagged
+  source has a current review. Other editorial blockers still apply.
+
 Python 3.12+, FastAPI, SQLAlchemy 2, PostgreSQL production / isolated SQLite tests, Celery/RabbitMQ. React/TypeScript/Vite UI. Imports start `app`. UTC naive datetimes in database; API ISO timestamps. UUID hex string ids except Event integer monotonically increasing id. All JSON values updated by assigning a new dict/list. Tests use pytest and httpx mock transports.
 
 Foundation agent owns app/config.py, app/db.py, app/models.py, app/auth.py, app/policies.py, app/budgets.py, tests/test_foundation.py, alembic/** and alembic.ini. Frontend agent owns frontend/**. Connector agent owns app/connectors/**, wordpress/**, tests/test_connectors.py. Intelligence agent owns app/intelligence/**, tests/test_intelligence.py. Main integrator owns app/main.py, app/api.py, app/workflows.py, app/worker.py, app/scheduler.py, app/operations.py, deployment files and integration tests. Do not edit another scope.

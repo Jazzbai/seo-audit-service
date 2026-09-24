@@ -27,6 +27,25 @@ as an experiment: these can request paid work when their prerequisites allow it.
 The existing review article still needs its genuine WordPress author and source
 validation. Do not invent an author or label an unchecked source as confirmed.
 
+## Reviewing a flagged source
+
+Save the draft first, then use its **Source review** panel. Open the source,
+compare it with the article and explain exactly what it supports and what it
+does not. Confirm that review, then choose **Record source review**. The server
+fetches public HTML, retains evidence and records your authenticated identity.
+It rechecks the draft and refuses a review if someone changed it meanwhile.
+
+A review can clear a source flag only for that saved revision. It never erases
+the original model flag, invents an author or authorizes publication. Reviews
+expire after seven days; changing the title, body, source list or generation
+requires another review. A successful fetch alone is not factual validation.
+
+For a one-article pilot, **Settings → Policies & budget → Article publishing
+scope** lets an owner select the specific draft by title. Save using **Save policy
+controls**. A restricted scope with no selections blocks all publication;
+unselected articles cannot publish. Keep both pauses on and allowed actions off
+until a separate launch is approved.
+
 ## Reading usage and spending
 
 An article's **Provider usage** panel separates recorded numeric input/output

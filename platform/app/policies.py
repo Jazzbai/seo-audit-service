@@ -36,6 +36,8 @@ DEFAULT_POLICY: dict[str, Any] = {
     "tracked_questions": [],
     "publish_days": [1, 4],
     "author_id": None,
+    # None preserves unrestricted-by-ID legacy behavior; [] permits no article.
+    "publication_article_ids": None,
 }
 
 _MAX_LIST_ITEMS = {
@@ -94,6 +96,14 @@ def _validated_settings(settings_dict: dict[str, Any] | None) -> dict[str, Any]:
         if action not in normalized_actions:
             normalized_actions.append(action)
     settings["allowed_actions"] = normalized_actions
+
+    article_ids = settings.get('publication_article_ids')
+    if article_ids is not None:
+        if (not isinstance(article_ids, list) or len(article_ids) > 50
+                or any(not isinstance(value, str) or not value or len(value) > 128
+                       or any(char.isspace() for char in value) for value in article_ids)):
+            raise ValueError('publication_article_ids must be null or up to 50 article IDs')
+        settings['publication_article_ids'] = list(dict.fromkeys(article_ids))
 
     protected_paths = settings.get("protected_paths")
     if not isinstance(protected_paths, list):
@@ -283,6 +293,9 @@ def evaluate_policy(
         blockers.append("action_not_allowed")
 
     if page is not None:
+        scope = settings.get('publication_article_ids')
+        if action == 'publish' and scope is not None and _page_value(page, 'article_id') not in scope:
+            blockers.append('article_not_in_publication_scope')
         path = _page_path(page)
         if any(_protected_path(path, pattern) for pattern in settings.get("protected_paths", [])):
             blockers.append("protected_path")
