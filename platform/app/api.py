@@ -739,6 +739,14 @@ def edit_article(site_id: str, article_id: str, payload: ArticlePatch, ctx=Depen
         raise HTTPException(409, 'Create a refresh workflow for a published or in-flight article')
     db.add(Revision(site_id=site_id, article_id=article.id, body=article.body, title=article.title, reason='editor_save'))
     for key, value in payload.model_dump(exclude_unset=True).items():
+        if key == 'brief':
+            generation = (article.brief or {}).get('generation')
+            if isinstance(generation, dict) and generation.get('kind') in ('provider_generation', 'provider_draft'):
+                # Browser responses redact token-shaped fields. An editor save
+                # must not persist those placeholders over provider metering,
+                # or let an edited brief rewrite the original source history.
+                # Only the generation workflow replaces provider provenance.
+                value = {**(value or {}), 'generation': generation}
         setattr(article, key, utc(value) if key == 'scheduled_at' else value)
     if 'body' in payload.model_fields_set:
         # Record who supplied an editorial draft, not a claim that it is true

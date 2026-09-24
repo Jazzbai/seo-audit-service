@@ -1,3 +1,6 @@
+import pytest
+
+from app.models import Article
 from test_platform import platform
 
 
@@ -29,3 +32,35 @@ def test_edit_keeps_provider_provenance_and_research(platform):
     assert edited['brief']['last_editor_revision']['kind'] == 'authenticated_editor'
     checked = client.post(f'{path}/{article["id"]}/check').json()
     assert 'research_review_required' in checked['blockers']
+
+
+@pytest.mark.parametrize('change', ['roundtrip', 'omit', 'rewrite'])
+def test_editor_brief_cannot_overwrite_provider_usage_or_source_history(platform, change):
+    client, factory, site_id = platform
+    original = {
+        'kind': 'provider_generation', 'provider': 'isolated-fixture',
+        'usage': {'input_tokens': 120, 'output_tokens': 60},
+        'unverified_sources': [{'url': 'https://unverified.example/claim'}],
+    }
+    with factory() as db:
+        article = Article(site_id=site_id, title='Repair preparation checklist',
+                          brief={'generation': original}, body='<p>Original.</p>')
+        db.add(article)
+        db.commit()
+        article_id = article.id
+    path = f'/api/v1/sites/{site_id}/articles/{article_id}'
+    brief = client.get(path).json()['brief']
+    assert brief['generation']['usage']['input_tokens'] == '[redacted]'
+    if change == 'omit':
+        brief.pop('generation')
+    elif change == 'rewrite':
+        brief['generation'] = {'kind': 'authenticated_editor', 'unverified_sources': []}
+    brief['angle'] = 'Prepare a list of questions'
+    edited = client.patch(path, json={'body': '<p>Edited.</p>', 'brief': brief})
+    assert edited.status_code == 200
+    with factory() as db:
+        stored = db.get(Article, article_id)
+        assert stored.brief['generation'] == original
+        assert stored.brief['angle'] == brief['angle']
+        assert stored.brief['last_editor_revision']['kind'] == 'authenticated_editor'
+        assert stored.body == '<p>Edited.</p>'
