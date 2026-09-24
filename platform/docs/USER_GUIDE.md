@@ -24,8 +24,10 @@ workflows** off, and publishing unselected. Read-only monitoring can continue.
 Do not press **Generate draft**, paid visibility controls, or an autopilot button
 as an experiment: these can request paid work when their prerequisites allow it.
 
-The existing review article still needs its genuine WordPress author and source
-validation. Do not invent an author or label an unchecked source as confirmed.
+As of the 2026-09-24 preparation checkpoint, the existing article's three source
+reviews are recorded; its remaining editorial blocker is the genuine WordPress
+author. Independent recovery-key access and notification delivery still need
+verification. Do not invent an author or enable live publication to clear a queue.
 
 ## Reviewing a flagged source
 
