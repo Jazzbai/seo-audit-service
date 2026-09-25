@@ -306,7 +306,7 @@ export function MicrosoftGraphConnectionCard({ connection, siteId, canEdit, onCh
 
   const reviewValid = Boolean(scopeMailbox && scopeNoUnscoped && scopeEvidence.trim().length >= 30 && scopeEvidence.trim().length <= 4000)
 
-  return <section className="connection-card" aria-label="Microsoft 365 Graph connection">
+  return <section className="connection-card microsoft-graph-connection" aria-label="Microsoft 365 Graph connection">
     <div className="connection-card-header">
       <div>
         <div className="connection-card-name">Microsoft 365 Graph</div>

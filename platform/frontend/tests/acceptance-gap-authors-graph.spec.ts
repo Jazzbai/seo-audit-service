@@ -362,6 +362,53 @@ test('Microsoft Graph needs explicit owner scope review, sends one test only on 
   }])
 })
 
+test('Microsoft Graph card and actions fit a 390px viewport before and after a test request', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const controls = await installMocks(page, {
+    graphConnection: {
+      kind: 'microsoft_graph',
+      status: 'connected',
+      safe_fields: { tenant_id: 'tenant-existing', client_id: 'client-existing' },
+      settings: { sender: 'reports@example.test', recipients: ['owner@example.test'], digest_enabled: false },
+      capabilities: { scope_review: null },
+    },
+  })
+  await page.goto('/sites/site-graph/settings/connections')
+  const graph = page.getByRole('region', { name: 'Microsoft 365 Graph connection' })
+  const send = graph.getByRole('button', { name: 'Send ONE test email now' })
+  await expect(graph).toBeVisible()
+  await expect(send).toBeDisabled()
+
+  async function expectLayoutFits() {
+    const layout = await graph.evaluate((card) => {
+      const bounds = card.getBoundingClientRect()
+      return {
+        pageFits: document.documentElement.scrollWidth <= innerWidth,
+        cardFits: bounds.left >= 0 && bounds.right <= innerWidth,
+        overflowingControls: Array.from(card.querySelectorAll('button, input, textarea, fieldset')).filter((element) => {
+          const rect = element.getBoundingClientRect()
+          return rect.left < bounds.left || rect.right > bounds.right || element.scrollWidth > element.clientWidth + 1
+        }).map((element) => element.getAttribute('aria-label') || element.textContent?.trim()),
+      }
+    })
+    expect(layout).toEqual({ pageFits: true, cardFits: true, overflowingControls: [] })
+  }
+
+  await expectLayoutFits()
+  expect(controls.notificationTests).toHaveLength(0)
+  await graph.getByLabel('Confirm mailbox scoped').check()
+  await graph.getByLabel('Confirm no unscoped send').check()
+  await graph.getByLabel('Admin evidence notes').fill('Admin reviewed Exchange mailbox scope for this configured sender.')
+  await graph.getByRole('button', { name: 'Record owner mailbox scope attestation' }).click()
+  await expect(send).toBeEnabled()
+  await send.click()
+  const receipt = graph.getByRole('button', { name: 'Record owner receipt confirmation' })
+  await expect(receipt).toBeVisible()
+  await expect(receipt).toBeDisabled()
+  await expectLayoutFits()
+  expect(controls.notificationTests).toHaveLength(1)
+})
+
 test('Microsoft Graph rejects more than ten recipients in its settings form', async ({ page }) => {
   const controls = await installMocks(page, {
     graphConnection: {

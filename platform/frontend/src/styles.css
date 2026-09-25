@@ -346,6 +346,9 @@ tbody tr:hover td { background: #fdfdfa; }
 .secret-toggle { position: absolute; right: 8px; top: 29px; border: 0; background: none; color: var(--subtle); padding: 5px; }
 .connection-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 16px; }
 .connection-actions-right { display: flex; gap: 7px; }
+.microsoft-graph-connection, .microsoft-graph-connection fieldset { min-inline-size: 0; }
+.microsoft-graph-connection .button { max-width: 100%; white-space: normal; }
+.microsoft-graph-connection .connection-actions { flex-wrap: wrap; }
 .connection-note { color: var(--subtle); font-size: .7rem; margin-top: 12px; line-height: 1.4; }
 .policy-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }

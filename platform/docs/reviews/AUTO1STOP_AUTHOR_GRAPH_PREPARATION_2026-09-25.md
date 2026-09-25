@@ -1,6 +1,7 @@
 # Controlled pilot: current authors and Microsoft 365
 
-Status: implementation verification in progress; **NO-GO for live publication**.
+Status: preparation release deployed with follow-up verification outstanding;
+**NO-GO for live publication**.
 This checkpoint continues the retained one-article preparation goal. It does not
 start the seven-day pilot, grant paid-work authority, or enroll existing pages.
 
@@ -46,8 +47,8 @@ permissions, failure states and the new author/Graph journeys).
 
 | Gate | State / evidence needed |
 | --- | --- |
-| Deploy and verify this release | Local verification passed; deployment pending |
-| Fresh real-site author lookup | Pending deployed endpoint verification; old inventory is not current authority |
+| Deploy and verify this release | `fe36cbb` pushed and deployments requested; frontend success confirmed, public API/UI verified; private container/source checks interrupted by lost VPN access |
+| Fresh real-site author lookup | Complete authenticated response on September 25 at 17:00 UTC: eligible IDs 1, 4, 3; not one account |
 | Owner's author choice | Required, even if only one account is eligible |
 | Source support | Three revision-bound reviews recorded September 24; recheck expiry and revision before launch |
 | One-article policy and protections | Retained disabled; verify unchanged after deployment |
@@ -59,3 +60,31 @@ permissions, failure states and the new author/Graph journeys).
 Owner instructions: [user guide](../USER_GUIDE.md) and
 [Microsoft 365 setup](../MICROSOFT_365_NOTIFICATIONS.md). Never put credentials in
 Git, chat, screenshots, article text, or permission-review notes.
+
+## Production verification and remaining release work
+
+- Backend deployment handle: `j4zpgkeagaiczof2ezen7h29`.
+- Frontend deployment handle: `a40mo55qlmknjuwv3k0gzn8b`; Coolify reports success,
+  16:52:47–16:53:38 UTC. Public JavaScript asset `index-CF3jen9c.js` matches the
+  locally built release. New authenticated author endpoint returns HTTP 200.
+- Current eligible author display names: ID 1 `auto1stophouston@gmail.com`, ID 4
+  `ewservices`, ID 3 `snabbanalys`. No account is selected, created, modified or
+  deleted. Owner must identify the intended byline; these are fresh observations,
+  not the older inventory presented as current users.
+- Public read-only assertions passed after deployment: exact original body
+  SHA-256, retained three September 24 source-review timestamps, policy v3 with
+  one article/one post/zero refreshes, disabled policy, both pauses, no remote post,
+  no schedule, zero publications, and unchanged cost reservations.
+- New Graph form is available with test-send disabled and recurring digest off.
+  No Microsoft credentials, permission review, email send or receipt is proven.
+- Live inspection found horizontal overflow on the new Graph card at 390 px.
+  The scoped correction now passes a reproducing regression through the receipt
+  controls state: **9/9 focused author/Graph browser tests**, production build
+  and whitespace checks pass. This follow-up still needs frontend redeployment
+  and live verification when VPN access returns. No backend change is needed.
+- Both `10.0.1.12:8000` and `10.0.1.10:22` became unreachable. An attempted
+  read-only container verification could not obtain the terminal connection.
+  Do not resubmit deployments blindly; reconnect VPN and inspect existing handles.
+- The suggested independent recovery file
+  `C:\Users\alire\ForgeSEO-Secrets\recovery.env` does not exist at the checked
+  path. No fallback to running-container keys is counted as independent custody.
