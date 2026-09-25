@@ -57,13 +57,35 @@ export interface Connection {
   site_id?: Id
   kind: string
   status: 'connected' | 'needs_connection' | 'error' | 'testing' | string
-  capabilities?: Record<string, unknown>
+  capabilities?: Record<string, unknown> & { scope_review?: ConnectionScopeReview | null }
   checked_at?: string | null
   created_at?: string
   safe_fields?: Record<string, string>
   settings?: Record<string, unknown>
   credentials?: Record<string, unknown>
   error?: string
+}
+
+export interface ConnectionScopeReview {
+  kind: 'owner_attested_exchange_rbac' | string
+  reviewed_at: string
+  reviewer_id: string
+  configuration_sha256: string
+  evidence: string
+}
+
+export interface WordPressAuthor {
+  id: string
+  name: string
+}
+
+export interface AuthorDiscovery {
+  items: WordPressAuthor[]
+  complete: boolean
+  checked_at: string | null
+  authenticated_user_id: string | null
+  blockers: string[]
+  warnings?: string[]
 }
 
 export interface Overview {

@@ -1,16 +1,18 @@
 """Fixture-only coverage for the explicit one-article content autopilot."""
 
 import asyncio
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from app import workflows, worker
 from app.config import settings
+from app.connectors.security import encrypt_credentials
 from app.models import Article, Connection, Event, Job, Publication, Site
 from test_platform import platform
 
 
-def _ready_site(client, factory, site_id, *, posts_per_week=2, author_id="author-1", authors=None):
+def _ready_site(client, factory, site_id, *, posts_per_week=2, author_id="1", authors=None):
     """Configure a disposable site without contacting any external system."""
 
     authors = authors or [{"id": author_id, "name": "Fixture Writer"}]
@@ -44,7 +46,10 @@ def _ready_site(client, factory, site_id, *, posts_per_week=2, author_id="author
             Connection(
                 site_id=site_id,
                 kind="wordpress",
-                encrypted_credentials="opaque-wordpress-fixture",
+                encrypted_credentials=encrypt_credentials(
+                    {"username": "fixture", "application_password": "offline-fixture"},
+                    settings.ENCRYPTION_KEY,
+                ),
                 status="connected",
                 capabilities={
                     "authenticated": True,
@@ -63,7 +68,7 @@ def _ready_site(client, factory, site_id, *, posts_per_week=2, author_id="author
         db.commit()
 
 
-def _ready_credentials(monkeypatch):
+def _ready_credentials(monkeypatch, *, author_ids=("1",)):
     def credentials(_db, _site_id, kind):
         if kind == "wordpress":
             return {"fixture": True}, {}
@@ -79,8 +84,33 @@ def _ready_credentials(monkeypatch):
 
     monkeypatch.setattr(workflows, "credentials", credentials)
 
+    class FixtureWordPress:
+        async def __aenter__(self):
+            return self
 
-def _add_planned_article(factory, site_id, title="Fixture article", author_id="author-1"):
+        async def __aexit__(self, *args):
+            return None
+
+        async def discover_authors(self):
+            return {
+                "items": [
+                    {"id": author_id, "name": f"Fixture Writer {author_id}"}
+                    for author_id in author_ids
+                ],
+                "complete": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": "1",
+                "blockers": [],
+            }
+
+    async def client_for(_db, _site, kind="wordpress"):
+        assert kind == "wordpress"
+        return FixtureWordPress()
+
+    monkeypatch.setattr(workflows, "client_for", client_for)
+
+
+def _add_planned_article(factory, site_id, title="Fixture article", author_id="1"):
     with factory() as db:
         article = Article(
             site_id=site_id,
@@ -201,14 +231,14 @@ def test_content_autopilot_prefers_configured_verified_author(platform, monkeypa
         client,
         factory,
         site_id,
-        author_id="author-2",
+        author_id="2",
         authors=[
-            {"id": "author-1", "name": "First Fixture Writer"},
-            {"id": "author-2", "name": "Configured Fixture Writer"},
+            {"id": "1", "name": "First Fixture Writer"},
+            {"id": "2", "name": "Configured Fixture Writer"},
         ],
     )
     article_id = _add_planned_article(factory, site_id, author_id=None)
-    _ready_credentials(monkeypatch)
+    _ready_credentials(monkeypatch, author_ids=("1", "2"))
     calls = []
     _patch_successful_content_steps(monkeypatch, calls)
     monkeypatch.setattr(settings, "GLOBAL_PAUSE", False)
@@ -217,7 +247,7 @@ def test_content_autopilot_prefers_configured_verified_author(platform, monkeypa
 
     assert result["status"] == "published"
     with factory() as db:
-        assert db.get(Article, article_id).author_id == "author-2"
+        assert db.get(Article, article_id).author_id == "2"
 
 
 def test_content_autopilot_generation_review_stops_before_publication(platform, monkeypatch):
@@ -292,7 +322,7 @@ def test_content_autopilot_enforces_site_scope_and_weekly_quota(platform, monkey
             "facts": {
                 "business_name": "Other site",
                 "services": ["Repairs"],
-                "authors": [{"id": "author-1", "name": "Fixture Writer"}],
+                "authors": [{"id": "1", "name": "Fixture Writer"}],
             },
         },
     )

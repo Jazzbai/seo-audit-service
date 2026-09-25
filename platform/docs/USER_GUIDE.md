@@ -134,3 +134,33 @@ alert delivery, and produce an explicit go/no-go checklist. Keep live publishing
 disabled until those prerequisites and the owner's launch approval are recorded.
 
 See the [rehearsal evidence and remaining gates](reviews/WORDPRESS_PUBLISHING_REHEARSAL_2026-09-24.md).
+
+## Choose a current WordPress author
+
+Open the retained article and use the author selector to refresh the available
+WordPress authors. It reads the authenticated WordPress user list, not an old
+inventory. Choose the actual person responsible for the article, save, and run
+the editorial check again. Even when only one person is eligible, the platform
+does not choose them for you. The policy's default author is a separate setting.
+
+Deleted users and users who cannot write posts are not selectable. If WordPress
+does not allow a complete, authenticated lookup, the dashboard says so and blocks
+selection; a blank list does not mean the site has no users. An account permitted
+to assign only itself is explicitly labelled. Author checks expire after five
+minutes and run again immediately before remote draft creation/publication.
+
+## Microsoft 365 notification setup
+
+An owner can configure Microsoft 365 in **Settings > Connections**. Follow the
+[mailbox-scoped setup guide](MICROSOFT_365_NOTIFICATIONS.md). Enter credentials
+only in the private connection form, never in an article or evidence note.
+
+There are three separate checks: authentication, the owner's review of restricted
+mailbox permissions, and an explicitly approved test email. Authentication alone
+does not prove sending permission. Microsoft accepting a message does not prove
+receipt: check the approved recipient's inbox and then record confirmation.
+
+Recurring digests start disabled. Changing credentials or email settings clears
+the previous permission review; reviews also expire after seven days. A timed-out
+send is shown as uncertain and is not automatically retried. Keep publishing
+paused while these pilot prerequisites are being completed.

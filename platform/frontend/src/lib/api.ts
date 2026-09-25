@@ -1,5 +1,6 @@
 import type {
   Article,
+  AuthorDiscovery,
   AuthPayload,
   AuthStatus,
   Candidate,
@@ -175,10 +176,23 @@ export const connectionsApi = {
   list: (siteId: string) => list<Connection>(`/sites/${encode(siteId)}/connections`),
   save: (siteId: string, kind: string, body: { credentials: Record<string, unknown>; settings: Record<string, unknown> }) =>
     request<Connection>(`/sites/${encode(siteId)}/connections/${encode(kind)}`, { method: 'PUT', body }),
+  reviewMicrosoftGraphScope: (siteId: string, body: { confirms_mailbox_scoped: true; confirms_no_unscoped_send: true; evidence: string }) =>
+    request<Connection>(`/sites/${encode(siteId)}/connections/microsoft_graph/scope-review`, { method: 'POST', body }),
   oauthStartUrl: (siteId: string, kind: 'gsc' | 'ga4') =>
     `${API_ROOT}/sites/${encode(siteId)}/connections/${encode(kind)}/oauth/start`,
   test: (siteId: string, kind: string) => request<Job>(`/sites/${encode(siteId)}/connections/${encode(kind)}/test`, { method: 'POST', body: {} }),
   revoke: (siteId: string, kind: string) => request<void>(`/sites/${encode(siteId)}/connections/${encode(kind)}`, { method: 'DELETE' }),
+}
+
+export const authorsApi = {
+  discover: (siteId: string) => request<AuthorDiscovery>(`/sites/${encode(siteId)}/authors`, { cache: 'no-store' }),
+}
+
+export const notificationsApi = {
+  test: (siteId: string, body: { kind: 'microsoft_graph'; idempotency_key: string; confirm_send: true }) =>
+    request<Job>(`/sites/${encode(siteId)}/notifications/test`, { method: 'POST', body }),
+  recordReceipt: (siteId: string, jobId: string, body: { confirms_received: true; notes: string }) =>
+    request<Job>(`/sites/${encode(siteId)}/notifications/${encode(jobId)}/receipt`, { method: 'POST', body }),
 }
 
 export const policyApi = {

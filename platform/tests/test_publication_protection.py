@@ -6,7 +6,8 @@ from sqlalchemy import select
 
 from app import workflows
 from app.config import settings
-from app.models import Article, Job, Publication, Site
+from app.connectors.security import encrypt_credentials
+from app.models import Article, Connection, Job, Publication, Site
 from app.policies import create_policy
 from test_platform import platform
 
@@ -19,6 +20,16 @@ def seed(factory, site_id, protected):
                       'confirmed_sources': [{'url': 'https://example.test/about', 'title': 'Fixture facts'}]}
         create_policy(db, site, None, {'enabled': True, 'allowed_actions': ['publish'],
                                       'author_id': '1', 'protected_paths': protected})
+        db.add(Connection(
+            site_id=site_id,
+            kind='wordpress',
+            encrypted_credentials=encrypt_credentials(
+                {'username': 'fixture', 'application_password': 'offline-fixture'},
+                settings.ENCRYPTION_KEY,
+            ),
+            status='connected',
+            capabilities={'authenticated': True, 'native': {'create': True, 'publish': True}},
+        ))
         article = Article(site_id=site_id, title='Prepare for a repair visit', slug='repair-guide',
                           body='<p>Independent Workshop provides Repairs.</p>', author_id='1',
                           sources=site.facts['confirmed_sources'],
@@ -56,6 +67,14 @@ def test_resolved_protected_path_never_becomes_public(platform, monkeypatch, tar
     class Remote:
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
+        async def discover_authors(self):
+            return {
+                'items': [{'id': '1', 'name': 'Fixture Writer'}],
+                'complete': True,
+                'checked_at': '2026-09-25T12:00:00+00:00',
+                'authenticated_user_id': '1',
+                'blockers': [],
+            }
         async def create_draft(self, *args):
             writes.append('create_draft')
             return draft

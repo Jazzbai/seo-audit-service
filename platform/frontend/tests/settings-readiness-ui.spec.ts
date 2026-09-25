@@ -36,10 +36,16 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installSettingsMocks(page: Page, options: { connections?: unknown[]; policy?: Record<string, unknown>; authors?: unknown[] } = {}) {
+async function installSettingsMocks(page: Page, options: { connections?: unknown[]; policy?: Record<string, unknown>; authorDiscovery?: unknown } = {}) {
   const connections = options.connections ?? []
   const policy = { ...basePolicy, ...(options.policy ?? {}) }
-  const authors = options.authors ?? []
+  const authorDiscovery = options.authorDiscovery ?? {
+    items: [],
+    complete: true,
+    checked_at: '2026-09-25T12:00:00Z',
+    authenticated_user_id: '1',
+    blockers: [],
+  }
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -51,7 +57,8 @@ async function installSettingsMocks(page: Page, options: { connections?: unknown
     if (path === '/settings') return json(route, { global_pause: true })
     if (path === '/sites/site-1' && request.method() === 'GET') return json(route, site)
     if (path === '/sites/site-1/connections') return json(route, { items: connections, total: connections.length })
-    if (path === '/sites/site-1/pages') return json(route, { items: authors, total: authors.length })
+    if (path === '/sites/site-1/authors' && request.method() === 'GET') return json(route, authorDiscovery)
+    if (path === '/sites/site-1/pages') return json(route, { items: [], total: 0 })
     if (path === '/sites/site-1/budgets') return json(route, { reservations: { items: [], total: 0 } })
     return json(route, { items: [], total: 0 })
   })
@@ -111,10 +118,19 @@ test('settings distinguishes application-ready pilot safeguards from unverified 
       },
       { kind: 'dataforseo', status: 'connected', checked_at: '2026-09-18T12:00:00Z', capabilities: { authenticated: true } },
     ],
-    policy: { allowed_actions: ['metadata', 'publish'], author_id: 'author-7' },
-    authors: [{ resource_key: 'authors:author-7', resource_type: 'authors', title: 'Taylor Writer' }],
+    policy: { allowed_actions: ['metadata', 'publish'], author_id: '1' },
+    authorDiscovery: {
+      items: [{ id: '1', name: 'Taylor Writer' }],
+      complete: true,
+      checked_at: '2026-09-25T12:00:00Z',
+      authenticated_user_id: '1',
+      blockers: [],
+    },
   })
   await page.goto('/sites/site-1/settings/policies')
+  const authorSelect = page.getByLabel('Publishing author')
+  await expect(authorSelect.locator('option[value="1"]')).toHaveText('Taylor Writer (1)')
+  await authorSelect.selectOption('1')
 
   const checklist = page.getByRole('list', { name: 'Automation readiness checklist' })
   await expect(checklist.getByRole('listitem').filter({ hasText: 'WordPress access' })).toContainText('Ready')

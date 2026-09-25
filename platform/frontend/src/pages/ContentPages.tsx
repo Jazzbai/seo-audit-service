@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { AlertCircle, ArrowLeft, CalendarDays, Check, CheckCircle2, Clock3, FileText, History, Plus, RefreshCw, RotateCcw, Save, Send, ShieldAlert, Sparkles, XCircle } from 'lucide-react'
 import { Badge, Button, EmptyState, ErrorState, Field, Notice, PageHeader, Panel, TableShell } from '../components/ui'
-import { articlesApi, connectionsApi, detailMessage, jobsApi, pagesApi, policyApi, settingsApi, sitesApi } from '../lib/api'
+import { articlesApi, authorsApi, connectionsApi, detailMessage, jobsApi, policyApi, settingsApi, sitesApi } from '../lib/api'
 import { formatDate, formatDateTime, fromDateTimeLocal, titleCase, toDateTimeLocal, truncate } from '../lib/format'
-import type { Article, CheckResult, Connection, ContentAutopilotResult, GlobalSettings, PageRecord, Policy, Revision, Site } from '../types'
+import type { Article, AuthorDiscovery, CheckResult, Connection, ContentAutopilotResult, GlobalSettings, Policy, Revision, Site } from '../types'
 import { ResourceStateView, useResource, useSiteId } from './shared'
 import { useAuth } from '../context/AppContext'
 import { ProviderUsagePanel } from '../components/ProviderUsagePanel'
 import { SourceReviewPanel } from '../components/SourceReviewPanel'
+import { AuthorDiscoverySelector, useAuthorDiscovery } from '../components/AuthorDiscoverySelector'
 
 const IMAGE_SOURCE_KINDS = ['owner_provided', 'licensed', 'generated_illustration'] as const
 type ImageSourceKind = typeof IMAGE_SOURCE_KINDS[number]
@@ -178,7 +179,7 @@ interface CalendarData extends Awaited<ReturnType<typeof articlesApi.list>> {
   site: Site | null
   policy: Policy | null
   settings: GlobalSettings | null
-  pages: PageRecord[]
+  authorDiscovery: AuthorDiscovery | null
   readErrors: CalendarReadError[]
   refreshedAt: string
 }
@@ -193,6 +194,21 @@ async function readCalendarSource<T>(reader: () => Promise<T>): Promise<Calendar
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function isUsableAuthorDiscovery(value: unknown): value is AuthorDiscovery {
+  return isRecord(value)
+    && value.complete === true
+    && Array.isArray(value.items)
+    && value.items.every((item) => isRecord(item)
+      && typeof item.id === 'string'
+      && Boolean(item.id.trim())
+      && typeof item.name === 'string'
+      && Boolean(item.name.trim()))
+    && Array.isArray(value.blockers)
+    && value.blockers.length === 0
+    && typeof value.authenticated_user_id === 'string'
+    && Boolean(value.authenticated_user_id.trim())
 }
 
 function isSite(value: unknown): value is Site {
@@ -259,15 +275,8 @@ function checkedConnection(connection: Connection | undefined, label: string, re
 }
 
 function verifiedAuthorIds(data: CalendarData) {
-  const ids = new Set<string>()
-  const wordpress = data.connections.find((connection) => connection.kind === 'wordpress')
-  const authenticated = wordpress?.capabilities?.authenticated_author
-  if (isRecord(authenticated) && authenticated.id !== undefined && String(authenticated.id).trim()) ids.add(String(authenticated.id))
-  for (const page of data.pages.filter((item) => item.resource_type === 'authors')) {
-    const id = page.resource_key.split(':').slice(1).join(':')
-    if (id) ids.add(id)
-  }
-  return ids
+  if (!isUsableAuthorDiscovery(data.authorDiscovery)) return new Set<string>()
+  return new Set(data.authorDiscovery.items.map((author) => author.id))
 }
 
 function contentAutopilotChecks(data: CalendarData, role: ReturnType<typeof useAuth>['role'], stale: boolean, resourceError: string | null): AutopilotCheck[] {
@@ -313,13 +322,16 @@ function contentAutopilotChecks(data: CalendarData, role: ReturnType<typeof useA
 
   const authorId = data.policy?.settings.author_id
   const authorIds = verifiedAuthorIds(data)
-  const authorError = data.readErrors.find((item) => item.key === 'pages')
+  const authorDiscoveryUsable = isUsableAuthorDiscovery(data.authorDiscovery)
+  const authorError = data.readErrors.find((item) => item.key === 'authors')
   checks.push(!data.policy || !authorId
     ? { key: 'author', label: 'Verified author', state: 'needs_review', description: 'Configure a publishing author in policy settings, then verify that WordPress returns the same author.' }
-    : authorError && !authorIds.has(authorId)
+    : authorError || !data.authorDiscovery
       ? { key: 'author', label: 'Verified author', state: 'needs_review', description: 'Author verification could not be refreshed. Review the WordPress connection before trying again.' }
+      : !authorDiscoveryUsable
+        ? { key: 'author', label: 'Verified author', state: 'needs_review', description: 'Author discovery is incomplete, blocked, or malformed. Refresh the authenticated WordPress author check before starting this workflow.' }
       : authorIds.has(authorId)
-        ? { key: 'author', label: 'Verified author', state: 'ready', description: 'The configured publishing author was returned by the authenticated WordPress connection.' }
+        ? { key: 'author', label: 'Verified author', state: 'ready', description: 'The configured author was returned by the latest complete authenticated WordPress author check.' }
         : { key: 'author', label: 'Verified author', state: 'needs_review', description: 'The configured author was not returned by the latest WordPress capability check.' })
 
   return checks
@@ -379,13 +391,13 @@ export function ContentCalendarPage() {
   const siteId = useSiteId()
   const { role } = useAuth()
   const loader = useCallback(async (): Promise<CalendarData> => {
-    const [articles, connections, site, policy, settings, pages] = await Promise.all([
+    const [articles, connections, site, policy, settings, authorDiscovery] = await Promise.all([
       readCalendarSource(() => articlesApi.list(siteId, { limit: 200 })),
       readCalendarSource(() => connectionsApi.list(siteId)),
       readCalendarSource(() => sitesApi.get(siteId)),
       readCalendarSource(() => policyApi.get(siteId)),
       readCalendarSource(() => settingsApi.get()),
-      readCalendarSource(() => pagesApi.list(siteId, { limit: 200 })),
+      readCalendarSource(() => authorsApi.discover(siteId)),
     ])
     if (!articles.value) throw new Error(articles.error || 'The article calendar could not be loaded.')
     const normalizedSite = isSite(site.value) ? site.value : null
@@ -396,7 +408,7 @@ export function ContentCalendarPage() {
       normalizedSite ? null : sourceError('site', { ...site, value: null }, 'Site pause state was not returned.'),
       normalizedPolicy ? null : sourceError('policy', { ...policy, value: null }, 'Policy state was not returned.'),
       normalizedSettings ? null : sourceError('settings', { ...settings, value: null }, 'Workspace pause state was not returned.'),
-      sourceError('pages', pages, 'Author verification records were not returned.'),
+      sourceError('authors', authorDiscovery, 'Author verification was not returned.'),
     ].filter((item): item is CalendarReadError => Boolean(item))
     return {
       ...articles.value,
@@ -404,7 +416,7 @@ export function ContentCalendarPage() {
       site: normalizedSite,
       policy: normalizedPolicy,
       settings: normalizedSettings,
-      pages: pages.value?.items ?? [],
+      authorDiscovery: authorDiscovery.value,
       readErrors,
       refreshedAt: new Date().toISOString(),
     }
@@ -522,7 +534,7 @@ export function ArticlesPage() {
   </ResourceStateView>
 }
 
-interface EditorData { article: Article | null; revisions: Revision[]; connections: Connection[]; pages: PageRecord[] }
+interface EditorData { article: Article | null; revisions: Revision[] }
 
 function persistedCheck(article?: Article | null): CheckResult | null {
   const checks = article?.checks
@@ -541,14 +553,13 @@ export function ArticleEditorPage() {
   const { role } = useAuth()
   const existingId = articleId
   const canEdit = role === 'owner' || role === 'editor'
+  const authorDiscovery = useAuthorDiscovery(siteId)
   const loader = useCallback(async (): Promise<EditorData> => {
-    const [article, revisions, connections, pages] = await Promise.all([
+    const [article, revisions] = await Promise.all([
       existingId ? articlesApi.get(siteId, existingId) : Promise.resolve(null),
       existingId ? articlesApi.revisions(siteId, existingId) : Promise.resolve({ items: [] as Revision[] }),
-      connectionsApi.list(siteId),
-      pagesApi.list(siteId, { limit: 200 }),
     ])
-    return { article, revisions: revisions.items, connections: connections.items, pages: pages.items }
+    return { article, revisions: revisions.items }
   }, [existingId, siteId])
   const resource = useResource(loader, [siteId, existingId])
   const [title, setTitle] = useState('')
@@ -566,21 +577,7 @@ export function ArticleEditorPage() {
   const [error, setError] = useState<string | null>(null)
   const [check, setCheck] = useState<CheckResult | null>(null)
   const [selectedRevision, setSelectedRevision] = useState<Revision | null>(null)
-  const verifiedAuthors = useMemo(() => {
-    const values = new Map<string, string>()
-    const wordpress = resource.data?.connections.find((connection) => connection.kind === 'wordpress')
-    const authenticated = wordpress?.capabilities?.authenticated_author
-    if (authenticated && typeof authenticated === 'object') {
-      const author = authenticated as Record<string, unknown>
-      if (author.id !== undefined && String(author.id).trim()) values.set(String(author.id), String(author.name || `WordPress author ${author.id}`))
-    }
-    for (const page of resource.data?.pages.filter((item) => item.resource_type === 'authors') ?? []) {
-      const id = page.resource_key.split(':').slice(1).join(':')
-      if (id) values.set(id, page.title || `WordPress author ${id}`)
-    }
-    return Array.from(values, ([id, name]) => ({ id, name }))
-  }, [resource.data])
-  const authorIsVerified = !authorId || verifiedAuthors.some((author) => author.id === authorId)
+  const authorIsVerified = authorDiscovery.isVerified(authorId)
   const recordMatchesRoute = Boolean(resource.data && (existingId
     ? resource.data.article?.id === existingId
     : resource.data.article === null))
@@ -633,7 +630,7 @@ export function ArticleEditorPage() {
     setMessage(null)
     try {
       if (!title.trim()) throw new Error('Add a title before saving the article.')
-      if (!authorIsVerified) throw new Error('Choose an author returned by the authenticated WordPress connection, or clear the author field.')
+      if (!authorIsVerified) throw new Error('The selected author is not verified by the latest complete author check. Refresh discovery or clear the author field.')
       const imageSourceError = imageSourceValidationError(imageSources)
       if (imageSourceError) throw new Error(imageSourceError)
       if (existingId) {
@@ -719,7 +716,7 @@ export function ArticleEditorPage() {
       {!canEdit && <div className="mb-20"><Notice kind="warning" title="Read-only for your role">Viewer access can review article state, but editor access is required to save, check, schedule, publish, or roll back content.</Notice></div>}
       <fieldset disabled={!canEdit || !editorReady} style={{ border: 0, padding: 0, margin: 0 }}>
       <div className="editor-layout">
-        <Panel className="editor-card"><form onSubmit={(event) => void save(event)}><div className="stack-sm"><Field label="Title" required><input className="editor-title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="A clear, complete article title" /></Field><div className="form-grid"><Field label="Target keyword"><input value={briefKeyword} onChange={(event) => setBriefKeyword(event.target.value)} placeholder="Optional, grounded keyword" /></Field><Field label="Publishing author" hint={verifiedAuthors.length ? 'Only authors returned by the authenticated WordPress connection can be selected.' : 'Test WordPress to load authors, or leave this blank for a review-only draft.'}><select aria-label="Publishing author" value={authorId} onChange={(event) => setAuthorId(event.target.value)}><option value="">No author selected</option>{authorId && !authorIsVerified && <option value={authorId}>Unverified configured author ({authorId})</option>}{verifiedAuthors.map((author) => <option key={author.id} value={author.id}>{author.name} ({author.id})</option>)}</select></Field><Field label="Editorial angle" hint="What useful question should this answer?"><textarea value={briefAngle} onChange={(event) => setBriefAngle(event.target.value)} placeholder="Describe the reader's need and the useful answer." /></Field><Field label="Outline" hint="Stored as brief metadata for review."><textarea value={briefOutline} onChange={(event) => setBriefOutline(event.target.value)} placeholder="H2s or the shape of the answer" /></Field><Field label="Sources" hint="One URL or source reference per line." ><textarea value={sources} onChange={(event) => setSources(event.target.value)} placeholder="https://example.com/confirmed-source" /></Field></div>{authorId && !authorIsVerified && <Notice kind="warning">This author is not verified by the current WordPress connection. Clear it or test the connection before saving.</Notice>}<Field label="Body" hint="The API checks the stored body for provenance, completeness, and policy before publication."><textarea className="editor-body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write or paste the article body here…" /></Field></div><div className="editor-footer"><span className="text-small text-muted">{existingId ? `Last saved ${formatDateTime(resource.data?.article?.updated_at)}` : 'Not saved yet'}</span><div className="editor-actions"><Button variant="secondary" type="submit" disabled={saving}><Save size={15} /> {saving ? 'Saving…' : 'Save article'}</Button>{existingId && <Button variant="ghost" type="button" onClick={() => void runCheck()} disabled={saving}><ShieldAlert size={15} /> Check</Button>}</div></div></form></Panel>
+          <Panel className="editor-card"><form onSubmit={(event) => void save(event)}><div className="stack-sm"><Field label="Title" required><input className="editor-title-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="A clear, complete article title" /></Field><div className="form-grid"><Field label="Target keyword"><input value={briefKeyword} onChange={(event) => setBriefKeyword(event.target.value)} placeholder="Optional, grounded keyword" /></Field><AuthorDiscoverySelector discovery={authorDiscovery} value={authorId} onChange={setAuthorId} /><Field label="Editorial angle" hint="What useful question should this answer?"><textarea value={briefAngle} onChange={(event) => setBriefAngle(event.target.value)} placeholder="Describe the reader's need and the useful answer." /></Field><Field label="Outline" hint="Stored as brief metadata for review."><textarea value={briefOutline} onChange={(event) => setBriefOutline(event.target.value)} placeholder="H2s or the shape of the answer" /></Field><Field label="Sources" hint="One URL or source reference per line." ><textarea value={sources} onChange={(event) => setSources(event.target.value)} placeholder="https://example.com/confirmed-source" /></Field></div><Field label="Body" hint="The API checks the stored body for provenance, completeness, and policy before publication."><textarea className="editor-body" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write or paste the article body here…" /></Field></div><div className="editor-footer"><span className="text-small text-muted">{existingId ? `Last saved ${formatDateTime(resource.data?.article?.updated_at)}` : 'Not saved yet'}</span><div className="editor-actions"><Button variant="secondary" type="submit" disabled={saving}><Save size={15} /> {saving ? 'Saving…' : 'Save article'}</Button>{existingId && <Button variant="ghost" type="button" onClick={() => void runCheck()} disabled={saving}><ShieldAlert size={15} /> Check</Button>}</div></div></form></Panel>
         <div className="stack">
           {existingId && <Panel padded><div className="stack-sm"><strong>Connected draft generation</strong><span className="text-small text-muted">Research, provider cost, and editorial checks are recorded before a draft can be scheduled.</span><Button variant="secondary" onClick={() => void generate()} disabled={saving || role === 'viewer'}><Sparkles size={14} /> Generate draft</Button></div></Panel>}
           {existingId && <ProviderUsagePanel brief={resource.data?.article?.brief} siteId={siteId} />}

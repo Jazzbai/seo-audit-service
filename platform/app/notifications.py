@@ -125,6 +125,22 @@ async def digest(db,site,job):
     # Make the in-app delivery durable even when the optional email channel
     # fails and the worker rolls back the raised exception.
     db.commit()
+    graph = find_connection(db, site.id, 'microsoft_graph')
+    if graph is not None:
+        # A configured Graph connection is an explicit channel choice. Never
+        # silently fall back to another sender when its credentials are revoked.
+        from app.graph_notifications import send_graph_notification
+        config = (graph.capabilities or {}).get('settings', {})
+        if config.get('digest_enabled') is not True:
+            return {**counts, 'email': 'disabled', 'in_app': 'delivered', 'channel': 'microsoft_graph'}
+        result = await send_graph_notification(
+            db, site, job, subject='ForgeSEO weekly report: ' + site.name,
+            body=(f'Site: {site.origin}\nOpen issues: {counts["open_issues"]}\n'
+                  f'Open incidents: {counts["open_incidents"]}\n'
+                  f'Verified publications this week: {counts["publications"]}\n'
+                  'Open ForgeSEO for coverage, costs and evidence. An empty queue does not mean the whole site is optimized.'),
+        )
+        return {**counts, **result, 'in_app': 'delivered', 'channel': 'microsoft_graph'}
     connection = find_connection(db,site.id,'smtp')
     if not connection or connection.status == 'revoked':
         return {**counts,'email':'needs_connection','in_app':'delivered'}

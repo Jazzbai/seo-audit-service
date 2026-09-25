@@ -18,7 +18,8 @@ async function mockPlatform(page: Page, role = 'owner', rejectReview = false) {
     if(path==='/settings') body={global_pause:true}
     if(path==='/sites') body={items:[site],total:1}
     if(path==='/sites/pilot-site') body=site
-    if(path.endsWith('/connections')) body={items:[{kind:'wordpress',status:'connected',capabilities:{authenticated:true,authenticated_author:{id:'1',name:'Fixture author'},native:{create:true,publish:true}}}],total:1}
+    if(path==='/sites/pilot-site/authors' && method==='GET') body={items:[{id:'1',name:'Fixture author'}],complete:true,checked_at:'2026-09-25T12:00:00Z',authenticated_user_id:'1',blockers:[]}
+    if(path.endsWith('/connections')) body={items:[{kind:'wordpress',status:'connected',capabilities:{authenticated:true,native:{create:true,publish:true}}}],total:1}
     if(path.endsWith('/budgets')) body={accounts:{items:[],total:0},reservations:{items:[],total:0}}
     if(path==='/sites/pilot-site/policy') {
       if(method==='PUT') { requests.policies.push(route.request().postDataJSON()); policy={...policy,version:policy.version+1,...route.request().postDataJSON()} }
@@ -83,6 +84,9 @@ test('stale-source review failure is visible and never claimed successful',async
 test('scope selects one named draft while preserving pauses and protected paths',async({page})=>{
   const requests=await mockPlatform(page)
   await page.goto('/sites/pilot-site/settings/policies')
+  const authorSelect=page.getByLabel('Publishing author')
+  await expect(authorSelect.locator('option[value="1"]')).toHaveText('Fixture author (1)')
+  await authorSelect.selectOption('1')
   await page.getByLabel('Restrict publishing to selected articles').check()
   await expect(page.getByText('No articles selected: publication is blocked for every article.')).toBeVisible()
   await page.getByLabel('Prepare for your estimate (review_needed)').check()

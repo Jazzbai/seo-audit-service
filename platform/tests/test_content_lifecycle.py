@@ -1,14 +1,15 @@
 """End-to-end content lifecycle gate using the shared authenticated fixture."""
 
 import asyncio
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
 
 from app import workflows
 from app.config import settings
-from app.models import Article, Job, Page, Publication, Revision, Site
+from app.connectors.security import encrypt_credentials
+from app.models import Article, Connection, Job, Page, Publication, Revision, Site
 from app.operations import now
 from app.policies import create_policy
 from test_platform import platform
@@ -95,6 +96,15 @@ def test_article_lifecycle_runs_from_research_to_enrolled_refresh_evaluation(
 
         async def __aexit__(self, *args):
             return None
+
+        async def discover_authors(self):
+            return {
+                "items": [{"id": "1", "name": "Fixture Writer"}],
+                "complete": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": "1",
+                "blockers": [],
+            }
 
         @staticmethod
         def _content_hash(record):
@@ -184,10 +194,25 @@ def test_article_lifecycle_runs_from_research_to_enrolled_refresh_evaluation(
             {
                 "enabled": True,
                 "allowed_actions": ["publish", "refresh"],
-                "author_id": "author-1",
+                "author_id": "1",
                 "tracked_keywords": ["collision repair preparation"],
             },
         )
+
+        db.add(Connection(
+            site_id=site_id,
+            kind="wordpress",
+            encrypted_credentials=encrypt_credentials(
+                {"username": "fixture", "application_password": "offline-fixture"},
+                settings.ENCRYPTION_KEY,
+            ),
+            status="connected",
+            capabilities={
+                "authenticated": True,
+                "authenticated_author": {"id": "1", "name": "Fixture Writer"},
+                "native": {"create": True, "publish": True},
+            },
+        ))
 
         planned = asyncio.run(
             workflows.plan(

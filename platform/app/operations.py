@@ -349,7 +349,7 @@ def enqueue(db, site, kind: str, payload: dict | None = None,
             idempotency_key: str | None = None) -> Job:
     allowed = {"audit", "inventory", "poll_changes", "plan", "generate", "publish", "availability",
                "visibility", "refresh", "connection_test", "candidate", "rollback", "full_cycle",
-               "content_autopilot", "reconcile_publication", "browser", "digest", "targeted_audit"}
+               "content_autopilot", "reconcile_publication", "browser", "digest", "targeted_audit", "notification_test"}
     if kind not in allowed:
         raise ValueError("Unsupported job kind")
     payload = payload or {}

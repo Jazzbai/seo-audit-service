@@ -6,7 +6,7 @@ network edges are replaced with local doubles.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 import pytest
@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from app import operations, scheduler, worker, workflows
 from app.config import settings
+from app.connectors.security import encrypt_credentials
 from app.models import (
     Article,
     BudgetAccount,
@@ -63,7 +64,7 @@ def _seed_ready_site(factory, site_id):
             "audience": "local drivers",
             "services": ["Collision repair"],
             "locations": ["Houston"],
-            "authors": [{"id": "author-1", "name": "Fixture Writer"}],
+            "authors": [{"id": "1", "name": "Fixture Writer"}],
         }
         create_policy(
             db,
@@ -76,19 +77,22 @@ def _seed_ready_site(factory, site_id):
                 "posts_per_week": 1,
                 "publish_days": [0],
                 "monthly_budget_cents": 2,
-                "author_id": "author-1",
+                "author_id": "1",
             },
         )
         db.add_all([
             Connection(
                 site_id=site_id,
                 kind="wordpress",
-                encrypted_credentials="opaque-wordpress-fixture",
+                encrypted_credentials=encrypt_credentials(
+                    {"username": "fixture", "application_password": "offline-fixture"},
+                    settings.ENCRYPTION_KEY,
+                ),
                 status="connected",
                 capabilities={
                     "authenticated": True,
                     "authenticated_author": {
-                        "id": "author-1",
+                        "id": "1",
                         "name": "Fixture Writer",
                     },
                     "native": {"create": True, "publish": True},
@@ -121,7 +125,7 @@ def _seed_ready_site(factory, site_id):
             status="planned",
             brief={},
             managed=True,
-            author_id="author-1",
+            author_id="1",
             created_at=WINDOW,
             updated_at=WINDOW,
         )
@@ -207,6 +211,15 @@ def _install_local_boundaries(monkeypatch, *, publication_mode):
 
         async def __aexit__(self, *args):
             return None
+
+        async def discover_authors(self):
+            return {
+                "items": [{"id": "1", "name": "Fixture Writer"}],
+                "complete": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": "1",
+                "blockers": [],
+            }
 
         @staticmethod
         def _content_hash(record):
@@ -411,7 +424,7 @@ def test_scheduler_parent_runs_real_autopilot_worker_boundary(
         assert publication.status == "published"
         assert publication.operation_key == f"publish:{site_id}:{article_id}"
         assert publication.remote_id == "901"
-        assert publication.snapshot["article"]["author_id"] == "author-1"
+        assert publication.snapshot["article"]["author_id"] == "1"
         assert publication.snapshot["draft"]["resource_key"] == "posts:901"
         assert publication.result["status"] == "published"
         assert publication.result["public_status"] == 200

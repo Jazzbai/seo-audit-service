@@ -22,7 +22,7 @@ const basePolicy = {
   competitors: [],
   tracked_questions: [],
   publish_days: [1, 4],
-  author_id: 'author-1',
+  author_id: '1',
 }
 
 const readyConnections = [
@@ -32,7 +32,6 @@ const readyConnections = [
     checked_at: '2026-09-21T12:00:00Z',
     capabilities: {
       authenticated: true,
-      authenticated_author: { id: 'author-1', name: 'Taylor Writer' },
       native: { read: true, update: true, create: true, publish: true },
     },
   },
@@ -42,8 +41,8 @@ const readyConnections = [
 const authorPage = {
   id: 'author-page-1',
   site_id: 'site-1',
-  resource_key: 'authors:author-1',
-  url: 'https://pilot.example/?author=author-1',
+  resource_key: 'authors:1',
+  url: 'https://pilot.example/?author=1',
   title: 'Taylor Writer',
   resource_type: 'authors',
   enrolled: false,
@@ -71,6 +70,7 @@ type MockOptions = {
   connections?: unknown[]
   pages?: unknown[]
   articles?: unknown[]
+  authorDiscovery?: unknown
   jobStatus?: string
   jobResult?: Record<string, unknown>
 }
@@ -100,6 +100,13 @@ async function installCalendarMocks(page: Page, options: MockOptions = {}) {
     if (path === '/sites/site-1' && method === 'GET') return json(route, site)
     if (path === '/sites/site-1/articles' && method === 'GET') return json(route, { items: articles, total: articles.length })
     if (path === '/sites/site-1/connections' && method === 'GET') return json(route, { items: connections, total: connections.length })
+    if (path === '/sites/site-1/authors' && method === 'GET') return json(route, options.authorDiscovery ?? {
+      items: [{ id: '1', name: 'Taylor Writer' }],
+      complete: true,
+      checked_at: '2026-09-25T12:00:00Z',
+      authenticated_user_id: '1',
+      blockers: [],
+    })
     if (path === '/sites/site-1/policy' && method === 'GET') return json(route, { id: 'policy-1', version: 4, settings: policy })
     if (path === '/settings' && method === 'GET') return json(route, { global_pause: options.globalPause ?? false })
     if (path === '/sites/site-1/pages' && method === 'GET') return json(route, { items: pages, total: pages.length })
@@ -142,14 +149,25 @@ test('a paused site keeps content autopilot disabled with a plain-language expla
   expect(controls.jobRequests).toHaveLength(0)
 })
 
-test('missing policy and connections are shown as readiness gates', async ({ page }) => {
-  const controls = await installCalendarMocks(page, { policyEnabled: false, connections: [], pages: [] })
+test('missing policy, connections, and verified author are shown as readiness gates', async ({ page }) => {
+  const controls = await installCalendarMocks(page, {
+    policyEnabled: false,
+    connections: [],
+    pages: [],
+    authorDiscovery: {
+      items: [],
+      complete: false,
+      checked_at: '2026-09-25T12:00:00Z',
+      authenticated_user_id: null,
+      blockers: ['wordpress_connection_required'],
+    },
+  })
   await page.goto('/sites/site-1/content')
 
   await expect(page.getByRole('button', { name: 'Run content autopilot', exact: true })).toBeDisabled()
   await expect(page.getByText('The site policy is disabled. An owner must enable the policy before this workflow can run.', { exact: true })).toBeVisible()
   await expect(page.getByText('Needs Connection', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText('The configured author was not returned by the latest WordPress capability check.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Author discovery is incomplete, blocked, or malformed. Refresh the authenticated WordPress author check before starting this workflow.', { exact: true })).toBeVisible()
   expect(controls.jobRequests).toHaveLength(0)
 })
 
@@ -159,6 +177,7 @@ test('owner can run one content autopilot job and see its safe publication resul
 
   const button = page.getByRole('button', { name: 'Run content autopilot', exact: true })
   await expect(button).toBeEnabled()
+  await expect(page.getByText('The configured author was returned by the latest complete authenticated WordPress author check.', { exact: true })).toBeVisible()
   await button.click()
   await expect(page.getByText('Content autopilot is running one bounded article through research, generation, editorial checks, and publication verification.', { exact: true })).toBeVisible()
   await expect(page.getByText('One article was published and verified', { exact: true })).toBeVisible()

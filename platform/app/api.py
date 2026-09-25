@@ -150,6 +150,23 @@ class SourceReviewInput(Input):
     confirms_claim_support: bool = Field(strict=True)
 
 
+class MailboxScopeReview(Input):
+    confirms_mailbox_scoped: bool = Field(strict=True)
+    confirms_no_unscoped_send: bool = Field(strict=True)
+    evidence: str = Field(min_length=30, max_length=4000)
+
+
+class NotificationTestInput(Input):
+    kind: str
+    idempotency_key: str = Field(min_length=8, max_length=150)
+    confirm_send: bool = Field(strict=True)
+
+
+class NotificationReceiptInput(Input):
+    confirms_received: bool = Field(strict=True)
+    notes: str = Field(min_length=10, max_length=1000)
+
+
 class Decision(Input):
     decision: str
 
@@ -523,10 +540,20 @@ def connections(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     return paginated(db, Connection, [Connection.site_id == site_id], transform=connection_view)
 
 
+@router.get('/sites/{site_id}/authors')
+async def discover_site_authors(site_id: str, response: Response, ctx=Depends(require_user), db=Depends(get_db)):
+    from app.authors import refresh_authors
+    site = guard(db, ctx, site_id)
+    result = await refresh_authors(db, site)
+    response.headers['Cache-Control'] = 'no-store'
+    db.commit()
+    return result
+
+
 @router.put("/sites/{site_id}/connections/{kind}")
 def save_connection(site_id: str, kind: str, payload: ConnectionInput, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, owner=True)
-    if kind not in {'wordpress','woocommerce','gsc','ga4','dataforseo','ai','pagespeed','smtp'}:
+    if kind not in {'wordpress','woocommerce','gsc','ga4','dataforseo','ai','pagespeed','smtp','microsoft_graph'}:
         raise HTTPException(422, 'Unsupported connection type')
     allowed = {'base_url','endpoint','provider','request_format','model','estimated_cost_cents','max_cost_cents','site_url','property_id','conversion_event_names','dimensions','metrics','keywords','questions','url','strategy','categories',
                'language_code','locale','search_context_size','location_code','host','port','sender','recipients','ssl','starttls','digest_enabled',
@@ -538,6 +565,13 @@ def save_connection(site_id: str, kind: str, payload: ConnectionInput, ctx=Depen
         connection_settings = _validated_ga4_settings(connection_settings)
     elif kind == 'smtp':
         connection_settings = _validated_smtp_settings(connection_settings)
+    elif kind == 'microsoft_graph':
+        if set(connection_settings) - {'sender', 'recipients', 'digest_enabled'}:
+            raise HTTPException(422, 'Unsupported Microsoft 365 setting')
+        if set(payload.credentials) - {'tenant_id', 'client_id', 'client_secret'}:
+            raise HTTPException(422, 'Unsupported Microsoft 365 credential field')
+        if 'digest_enabled' in connection_settings and type(connection_settings['digest_enabled']) is not bool:
+            raise HTTPException(422, 'Microsoft 365 digest_enabled must be a boolean')
     from app.connectors.security import encrypt_credentials, decrypt_credentials
     row = find_connection(db, site_id, kind)
     incoming = {key:value for key,value in payload.credentials.items() if value not in ('',None)}
@@ -553,6 +587,14 @@ def save_connection(site_id: str, kind: str, payload: ConnectionInput, ctx=Depen
         return connection_view(row)
     try:
         existing = decrypt_credentials(row.encrypted_credentials,settings.ENCRYPTION_KEY) if row and row.encrypted_credentials and row.status != 'revoked' else {}
+        if kind == 'microsoft_graph':
+            from app.connectors.microsoft_graph import validate_graph_credentials, validate_graph_settings
+            merged_config = {**((row.capabilities or {}).get('settings', {}) if row else {}), **connection_settings}
+            try:
+                incoming = validate_graph_credentials({**existing, **incoming})
+                connection_settings = validate_graph_settings(merged_config)
+            except Exception:
+                raise HTTPException(422, 'Microsoft 365 requires valid tenant/client IDs, a client secret, sender, and recipients') from None
         ciphertext = encrypt_credentials({**existing,**incoming}, settings.ENCRYPTION_KEY)
     except ValueError as exc:
         raise HTTPException(503, 'Credential encryption is not configured correctly') from exc
@@ -566,6 +608,78 @@ def save_connection(site_id: str, kind: str, payload: ConnectionInput, ctx=Depen
     event(db, site, 'connection_updated', f'{kind} connection saved; credentials are encrypted')
     db.commit()
     return connection_view(row)
+
+
+@router.post('/sites/{site_id}/connections/microsoft_graph/scope-review')
+def review_mailbox_scope(site_id: str, payload: MailboxScopeReview, ctx=Depends(require_user), db=Depends(get_db)):
+    from app.graph_notifications import configuration_fingerprint
+    site = guard(db, ctx, site_id, owner=True)
+    row = find_connection(db, site_id, 'microsoft_graph')
+    if row is None or row.status != 'connected':
+        raise HTTPException(409, 'Test Microsoft 365 authentication before recording its mailbox scope')
+    if (payload.confirms_mailbox_scoped is not True or payload.confirms_no_unscoped_send is not True
+            or len(payload.evidence.strip()) < 30):
+        raise HTTPException(422, 'Confirm the single-mailbox scope and absence of broad Entra send permissions')
+    review = {'kind': 'owner_attested_exchange_rbac', 'reviewer_id': ctx['user_id'],
+              'reviewed_at': iso(now()), 'configuration_sha256': configuration_fingerprint(row),
+              'evidence': payload.evidence.strip()}
+    row.capabilities = {**(row.capabilities or {}), 'scope_review': review}
+    event(db, site, 'notification_scope_reviewed', 'Owner recorded Microsoft 365 mailbox-scope review',
+          {'user_id': ctx['user_id'], 'connection_id': row.id})
+    db.commit()
+    return connection_view(row)
+
+
+@router.post('/sites/{site_id}/notifications/test', status_code=202)
+def send_notification_test(site_id: str, payload: NotificationTestInput, ctx=Depends(require_user), db=Depends(get_db)):
+    from app.graph_notifications import configuration_fingerprint, require_scope_review
+    site = guard(db, ctx, site_id, owner=True)
+    # Serialize new test approvals per site in production PostgreSQL. SQLite
+    # remains the single-process test/development path.
+    site = db.scalar(select(Site).where(Site.id == site_id).with_for_update())
+    if payload.kind != 'microsoft_graph' or payload.confirm_send is not True:
+        raise HTTPException(422, 'Explicitly approve one Microsoft 365 test notification')
+    row = find_connection(db, site_id, payload.kind)
+    try:
+        require_scope_review(db, site, row)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    key = f'{site_id}:notification-test:{payload.idempotency_key}'
+    existing = db.scalar(select(Job).where(Job.idempotency_key == key))
+    if existing is None:
+        # A transport failure in the browser must not turn a repeated click
+        # with a new UUID into a second, potentially duplicate message.
+        pending = db.scalars(select(Job).where(Job.site_id == site_id,
+            Job.kind == 'notification_test')).all()
+        if any(job.status in ('queued', 'running', 'retry', 'needs_reconciliation')
+               or (job.result or {}).get('status') in ('sending', 'outcome_unknown') for job in pending):
+            raise HTTPException(409, 'A test notification is pending or uncertain; inspect its existing job before sending another')
+    return enqueue_response(db, site, 'notification_test', {
+        'kind': payload.kind, 'approved_by': ctx['user_id'], 'connection_id': row.id,
+        'configuration_sha256': configuration_fingerprint(row),
+    }, 'notification-test:' + payload.idempotency_key)
+
+
+@router.post('/sites/{site_id}/notifications/{job_id}/receipt')
+def confirm_notification_receipt(site_id: str, job_id: str, payload: NotificationReceiptInput,
+                                 ctx=Depends(require_user), db=Depends(get_db)):
+    site = guard(db, ctx, site_id, owner=True)
+    job = own(db, Job, job_id, site_id)
+    if (job.kind != 'notification_test' or (job.result or {}).get('status') != 'accepted'
+            or job.status != 'complete'):
+        raise HTTPException(409, 'Receipt confirmation requires an accepted test notification')
+    if payload.confirms_received is not True or len(payload.notes.strip()) < 10:
+        raise HTTPException(422, 'Confirm that the approved recipient actually received the test')
+    if (job.result or {}).get('receipt'):
+        return _job_view(job, include_idempotency_key=True)
+    job.result = {**job.result, 'recipient_confirmation': 'confirmed', 'receipt': {
+        'kind': 'owner_confirmed_recipient_receipt', 'confirmed_by': ctx['user_id'],
+        'confirmed_at': iso(now()), 'notes': payload.notes.strip(),
+    }}
+    event(db, site, 'notification_receipt_confirmed', 'Owner confirmed receipt of the test notification',
+          {'job_id': job.id, 'user_id': ctx['user_id']})
+    db.commit()
+    return _job_view(job, include_idempotency_key=True)
 
 
 @router.post("/sites/{site_id}/connections/{kind}/test", status_code=202)
@@ -738,6 +852,8 @@ def execute_candidate(site_id: str, candidate_id: str, ctx=Depends(require_user)
 
 @router.post('/sites/{site_id}/jobs', status_code=202)
 def add_job(site_id: str, payload: JobInput, ctx=Depends(require_user), db=Depends(get_db)):
+    if payload.kind == 'notification_test':
+        raise HTTPException(422, 'Use the owner-approved notification test endpoint')
     if payload.kind not in {'audit','inventory','poll_changes','plan','generate','publish','availability','visibility','refresh','content_autopilot','full_cycle'}:
         raise HTTPException(422, 'Unsupported requested job')
     full_cycle_mode_value = None
@@ -834,8 +950,10 @@ def revisions(site_id: str, article_id: str, ctx=Depends(require_user), db=Depen
 
 def check(db, site, article):
     from app.intelligence.content import check_article
+    from app.authors import apply_author_check, current_authors
     pages = [record(p) for p in db.scalars(select(Page).where(Page.site_id == site.id))]
     result = check_article(record(article), site.facts, pages)
+    result = apply_author_check(result, article.author_id, current_authors(find_connection(db, site.id, 'wordpress')))
     article.checks = result
     article.status = 'checked' if result['passed'] else 'review_needed'
     article.updated_at = now()
@@ -843,11 +961,17 @@ def check(db, site, article):
 
 
 @router.post('/sites/{site_id}/articles/{article_id}/check')
-def check_draft(site_id: str, article_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+async def check_draft(site_id: str, article_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, write=True)
     article = own(db, Article, article_id, site_id)
     if article.status in ('publishing','verifying','published'):
         raise HTTPException(409, 'Article is already in publication workflow')
+    if article.author_id:
+        from app.authors import refresh_authors
+        await refresh_authors(db, site)
+        db.refresh(article)
+        if article.status in ('publishing', 'verifying', 'published'):
+            raise HTTPException(409, 'Article entered publication while its author was checked')
     result = check(db, site, article)
     db.commit()
     return result
@@ -878,6 +1002,9 @@ async def review_article_source(site_id: str, article_id: str, payload: SourceRe
     if not url or url not in {source_url(value) for value in candidates}:
         raise HTTPException(422, 'Select an existing article source or a flagged source')
     before = review_fingerprint(record(article))
+    if article.author_id:
+        from app.authors import refresh_authors
+        await refresh_authors(db, site)
     try:
         observation = await asyncio.wait_for(network.fetch(url), timeout=25)
     except Exception:

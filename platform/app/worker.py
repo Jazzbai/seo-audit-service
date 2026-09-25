@@ -173,6 +173,9 @@ def run_job(job_id):
                 elif job.kind == 'digest':
                     from app.notifications import digest
                     handler = digest
+                elif job.kind == 'notification_test':
+                    from app.graph_notifications import notification_test
+                    handler = notification_test
                 else:
                     handler = HANDLERS[job.kind]
                 result = asyncio.run(handler(db,site,job))

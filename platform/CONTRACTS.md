@@ -98,7 +98,38 @@ All under /api/v1, same-origin cookies, JSON, error {detail:string|object}, GET 
 - GET /sites/{id}/products (Page product records), /incidents, /activity, /measurements, /publications -> list envelopes. Activity, overview, weekly-report, and SSE responses expose only an allowlisted scalar event summary; arbitrary event payloads, credentials, provider responses, and raw HTML never cross the browser boundary. Browser-facing Page source/signals, Finding/Candidate/Incident details, Article brief/sources, Publication snapshot/result, and Measurement data retain useful fields while recursively redacting credential-shaped nested values. POST /sites/{id}/measurements/import {items:[]} validated measurement observations with explicit kind/source provenance. GET /sites/{id}/reports/weekly -> JSON; ?format=csv -> CSV download. GET /sites/{id}/events is an authenticated SSE stream with Last-Event-ID replay: named `activity` events carry the safe event summary, while named `progress` events carry only safe bounded job status/stage fields. Both event names share the same site-scoped monotonic cursor.
 - GET/PATCH /settings -> {global_pause,...}; owner only patch emergency control persisted.
 
-Pagination limit default50/max200 offset >=0. No demo data injected into live flows. UI task status must reflect network/job truth. UI labels: Automatic, Needs review, Needs connection, Unsupported. Connection kinds wordpress,woocommerce,gsc,ga4,dataforseo,ai,pagespeed,smtp. Missing secrets shown as needs connection; don't ask for all credentials to onboard.
+Pagination limit default50/max200 offset >=0. No demo data injected into live flows. UI task status must reflect network/job truth. UI labels: Automatic, Needs review, Needs connection, Unsupported. Connection kinds wordpress,woocommerce,gsc,ga4,dataforseo,ai,pagespeed,smtp,microsoft_graph. Missing secrets shown as needs connection; don't ask for all credentials to onboard.
+
+## Controlled-pilot author and Microsoft 365 extension
+
+- `GET /sites/{id}/authors` performs fresh authenticated WordPress discovery and
+  returns `{items:[{id,name}],complete,checked_at,authenticated_user_id,blockers}`
+  with optional warnings. No cached inventory user is a selectable fallback.
+  Remote IDs are positive numeric WordPress IDs. Capability maps, not role names,
+  determine author eligibility and the connected account's ability to assign
+  others. Listing/access/pagination failures produce explicit incomplete results.
+  The resulting server-owned observation is bound to the connection and lasts
+  at most five minutes for local preflight; actual writes recheck authors freshly.
+- New connection kind `microsoft_graph`: encrypted credentials
+  `{tenant_id,client_id,client_secret}`; nonsecret settings
+  `{sender,recipients,digest_enabled:false}`. Fixed public Microsoft endpoints,
+  no redirects, at most ten recipients. Authentication Test sends no email and
+  does not claim mailbox authorization or delivery.
+- Owner-only `POST /sites/{id}/connections/microsoft_graph/scope-review` takes
+  `{confirms_mailbox_scoped:true,confirms_no_unscoped_send:true,evidence}`. This is
+  a dated, connection-bound **owner attestation** of external Exchange RBAC checks,
+  never proof inferred from token issuance. Review expires after seven days.
+- Owner-only `POST /sites/{id}/notifications/test` takes
+  `{kind:'microsoft_graph',idempotency_key,confirm_send:true}` and returns a durable
+  `notification_test` Job. Generic job submission cannot forge this approval.
+  Scope, configuration and current owner authority are rechecked before send.
+  HTTP 202 means `accepted`, not delivered; timeouts/worker loss do not resend.
+- Owner-only `POST /sites/{id}/notifications/{jobId}/receipt` takes
+  `{confirms_received:true,notes}` after an accepted, complete test job. Receipt
+  remains explicitly owner-confirmed, not automatically read from a mailbox.
+- Graph weekly digests require explicit opt-in and valid scope review. No SMTP
+  fallback or dual send occurs when Graph is selected. These notification
+  approvals never enable WordPress publication or disable site/global pauses.
 
 ## Acceptance beyond unit tests
 

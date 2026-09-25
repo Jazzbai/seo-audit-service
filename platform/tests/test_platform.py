@@ -1,6 +1,6 @@
 """Integration gates: browser auth, tenant boundaries, durable accounting and recovery."""
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app import api, worker
 from app.auth import get_db
 from app.config import settings
+from app.connectors.security import encrypt_credentials
 from app.main import app
 from app.models import Article, Base, Candidate, Connection, Finding, Heartbeat, Job, Measurement, Page, Site, Team
 from app.operations import enqueue, now
@@ -1555,6 +1556,15 @@ def test_enrolled_refresh_applies_in_place_and_can_roll_back(platform, monkeypat
         async def __aexit__(self, *args):
             return None
 
+        async def discover_authors(self):
+            return {
+                'items': [{'id': '9', 'name': 'Fixture Writer'}],
+                'complete': True,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'authenticated_user_id': '1',
+                'blockers': [],
+            }
+
         async def read(self, resource_key):
             assert resource_key == self.current['resource_key']
             return dict(self.current)
@@ -1593,6 +1603,16 @@ def test_enrolled_refresh_applies_in_place_and_can_roll_back(platform, monkeypat
         site.paused = False
         site.facts = {'business_name': 'Independent test', 'services': ['Repairs']}
         create_policy(db, site, None, {'enabled': True, 'allowed_actions': ['refresh'], 'refreshes_per_week': 1})
+        db.add(Connection(
+            site_id=site_id,
+            kind='wordpress',
+            encrypted_credentials=encrypt_credentials(
+                {'username': 'fixture', 'application_password': 'offline-fixture'},
+                settings.ENCRYPTION_KEY,
+            ),
+            status='connected',
+            capabilities={'authenticated': True, 'native': {'create': True, 'publish': True}},
+        ))
         page = Page(
             site_id=site_id, resource_key='posts:42', resource_type='posts',
             url='https://example.test/enrolled', title='Existing repair guide',
@@ -1827,6 +1847,15 @@ def test_stale_refresh_source_pauses_and_preserves_article_for_review(platform, 
         async def __aexit__(self, *args):
             return None
 
+        async def discover_authors(self):
+            return {
+                'items': [{'id': '42', 'name': 'Fixture Writer'}],
+                'complete': True,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'authenticated_user_id': '1',
+                'blockers': [],
+            }
+
         async def read(self, resource_key):
             return {
                 'resource_key': resource_key,
@@ -1858,6 +1887,16 @@ def test_stale_refresh_source_pauses_and_preserves_article_for_review(platform, 
             'allowed_actions': ['refresh'],
             'protected_paths': [],
         })
+        db.add(Connection(
+            site_id=site_id,
+            kind='wordpress',
+            encrypted_credentials=encrypt_credentials(
+                {'username': 'fixture', 'application_password': 'offline-fixture'},
+                settings.ENCRYPTION_KEY,
+            ),
+            status='connected',
+            capabilities={'authenticated': True, 'native': {'create': True, 'publish': True}},
+        ))
         page = Page(
             site_id=site_id,
             resource_key='posts:42',

@@ -1,12 +1,14 @@
 """Human source review is audited, revision-bound, tenant-scoped and not publishing."""
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
-from app import network
-from app.models import Article, Event, Membership, Site
+from app import network, workflows
+from app.config import settings
+from app.connectors.security import encrypt_credentials
+from app.models import Article, Connection, Event, Membership, Site
 from app.operations import iso, now
 from test_platform import platform
 
@@ -44,7 +46,48 @@ def source_fetch(monkeypatch):
     return calls
 
 
-def test_verified_review_clears_only_source_blocker_preserving_history(platform, source_fetch):
+@pytest.fixture
+def current_wordpress_author(platform, monkeypatch):
+    _, factory, site_id = platform
+    with factory() as db:
+        db.add(Connection(
+            site_id=site_id,
+            kind='wordpress',
+            encrypted_credentials=encrypt_credentials(
+                {'username': 'fixture', 'application_password': 'offline-fixture'},
+                settings.ENCRYPTION_KEY,
+            ),
+            status='connected',
+            capabilities={'authenticated': True, 'native': {'create': True, 'publish': True}},
+        ))
+        db.commit()
+
+    class FixtureWordPress:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def discover_authors(self):
+            return {
+                'items': [{'id': '1', 'name': 'Fixture'}],
+                'complete': True,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'authenticated_user_id': '1',
+                'blockers': [],
+            }
+
+    async def fixture_client(_db, _site, kind='wordpress'):
+        assert kind == 'wordpress'
+        return FixtureWordPress()
+
+    monkeypatch.setattr(workflows, 'client_for', fixture_client)
+
+
+def test_verified_review_clears_only_source_blocker_preserving_history(
+    platform, source_fetch, current_wordpress_author
+):
     client, factory, site_id = platform
     path = draft(platform)
     original = client.get(path).json()
@@ -67,7 +110,9 @@ def test_verified_review_clears_only_source_blocker_preserving_history(platform,
 @pytest.mark.parametrize('field,value', [('body', '<p>New unsupported intake promise.</p>'),
                                        ('title', 'A different complete repair title'),
                                        ('sources', [SOURCE, 'https://example.test/another'])])
-def test_edit_invalidates_but_does_not_erase_review(platform, source_fetch, field, value):
+def test_edit_invalidates_but_does_not_erase_review(
+    platform, source_fetch, current_wordpress_author, field, value
+):
     client, _, _ = platform
     path = draft(platform)
     client.post(path+'/source-reviews', json=payload(client, path)).raise_for_status()
@@ -78,7 +123,9 @@ def test_edit_invalidates_but_does_not_erase_review(platform, source_fetch, fiel
 
 
 @pytest.mark.parametrize('change', ['forge', 'erase', 'replace'])
-def test_browser_cannot_write_attestations_through_brief(platform, source_fetch, change):
+def test_browser_cannot_write_attestations_through_brief(
+    platform, source_fetch, current_wordpress_author, change
+):
     client, _, site_id = platform
     path = draft(platform)
     before = client.get(path).json()['brief']
@@ -126,7 +173,7 @@ def test_stale_edit_rejected_before_fetch(platform, source_fetch):
     assert source_fetch == []
 
 
-def test_edit_during_source_fetch_rejected(platform, monkeypatch):
+def test_edit_during_source_fetch_rejected(platform, monkeypatch, current_wordpress_author):
     client, factory, _ = platform
     path = draft(platform)
     async def fetch(url):
@@ -169,7 +216,9 @@ def test_missing_author_is_not_waived_by_source_review(platform, source_fetch):
     assert result['checks']['blockers'] == ['missing_author']
 
 
-def test_old_review_expires_and_other_site_cannot_review(platform, source_fetch):
+def test_old_review_expires_and_other_site_cannot_review(
+    platform, source_fetch, current_wordpress_author
+):
     client, factory, site_id = platform
     path = draft(platform)
     original = client.post(path+'/source-reviews', json=payload(client, path)).json()

@@ -12,6 +12,7 @@ import copy
 import hashlib
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -33,7 +34,9 @@ from .common import (
 )
 from .errors import (
     AmbiguousOutcome,
+    AuthenticationError,
     ConnectorError,
+    IncompleteInventory,
     ProtectedField,
     ResourceNotFound,
     SourceConflict,
@@ -1045,6 +1048,160 @@ class WordPressClient(AsyncConnector):
         })
         self._discovery['capabilities'] = capabilities
         return json_clone(capabilities)
+
+    async def discover_authors(self) -> dict[str, Any]:
+        """Return freshly checked, assignable users for WordPress posts.
+
+        Author discovery is deliberately independent of ``validate_connection``
+        and its cached capability document: the authenticated user and the
+        complete user collection are both fetched on every call.
+        """
+
+        me_path = self._wp_path("wp/v2/users/me")
+        try:
+            user, _ = await self._json_request(
+                "GET", me_path, params={"context": "edit"}
+            )
+        except ConnectorError as exc:
+            if exc.status_code == 401:
+                raise AuthenticationError(
+                    "WordPress rejected author discovery authentication",
+                    status_code=401,
+                    method="GET",
+                    url=exc.url,
+                    response_received=True,
+                ) from None
+            raise ConnectorError(
+                "WordPress could not verify author discovery permissions",
+                status_code=exc.status_code,
+                method="GET",
+                url=exc.url,
+                transport_error=exc.transport_error,
+                response_received=exc.response_received,
+            ) from None
+
+        if not isinstance(user, Mapping):
+            raise AuthenticationError("WordPress did not verify an authenticated user")
+        user_id_value = user.get("id")
+        if type(user_id_value) is not int or user_id_value < 1:
+            raise AuthenticationError("WordPress did not verify an authenticated user")
+        authenticated_user_id = str(user_id_value)
+
+        user_capabilities = user.get("capabilities")
+        required_connection_capabilities = (
+            "edit_posts",
+            "publish_posts",
+            "edit_others_posts",
+        )
+        if not isinstance(user_capabilities, Mapping) or any(
+            capability in user_capabilities and type(user_capabilities[capability]) is not bool
+            for capability in required_connection_capabilities
+        ):
+            connection_capabilities_complete = False
+        else:
+            connection_capabilities_complete = True
+
+        try:
+            users = await self._fetch_collection(
+                "users", params={"context": "edit"}
+            )
+        except IncompleteInventory:
+            return {
+                "items": [],
+                "complete": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": authenticated_user_id,
+                "blockers": ["author_listing_incomplete"],
+            }
+        except ConnectorError as exc:
+            if exc.status_code == 403:
+                return {
+                    "items": [],
+                    "complete": False,
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                    "authenticated_user_id": authenticated_user_id,
+                    "blockers": ["author_listing_denied"],
+                }
+            if exc.status_code == 401:
+                raise AuthenticationError(
+                    "WordPress rejected author discovery authentication",
+                    status_code=401,
+                    method="GET",
+                    url=exc.url,
+                    response_received=True,
+                ) from None
+            raise ConnectorError(
+                "WordPress author listing request failed",
+                status_code=exc.status_code,
+                method="GET",
+                url=exc.url,
+                transport_error=exc.transport_error,
+                response_received=exc.response_received,
+            ) from None
+
+        blockers: list[str] = []
+        if not connection_capabilities_complete:
+            blockers.append("connection_capabilities_incomplete")
+
+        candidates: list[dict[str, str]] = []
+        malformed_records = False
+        for record in users:
+            record_id = record.get("id")
+            name = record.get("name")
+            capabilities = record.get("capabilities")
+            if type(record_id) is not int or record_id < 1 or not isinstance(name, str):
+                malformed_records = True
+                continue
+            if not isinstance(capabilities, Mapping) or type(
+                capabilities.get("edit_posts", False)
+            ) is not bool:
+                malformed_records = True
+                continue
+            if capabilities.get("edit_posts") is True:
+                candidates.append({"id": str(record_id), "name": name})
+
+        if malformed_records:
+            blockers.append("author_records_incomplete")
+        if blockers:
+            return {
+                "items": [],
+                "complete": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": authenticated_user_id,
+                "blockers": blockers,
+            }
+
+        if (
+            user_capabilities.get("edit_posts") is not True
+            or user_capabilities.get("publish_posts") is not True
+        ):
+            return {
+                "items": [],
+                "complete": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": authenticated_user_id,
+                "blockers": ["connection_cannot_publish"],
+            }
+
+        if user_capabilities.get("edit_others_posts") is True:
+            assignable = candidates
+            final_blockers: list[str] = []
+        else:
+            assignable = [
+                candidate
+                for candidate in candidates
+                if candidate["id"] == authenticated_user_id
+            ]
+            final_blockers = []
+
+        return {
+            "items": assignable,
+            "complete": True,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "authenticated_user_id": authenticated_user_id,
+            "blockers": final_blockers,
+            "warnings": [] if user_capabilities.get("edit_others_posts") is True else ["connection_can_only_assign_self"],
+        }
 
     def _discover_status_names(self) -> list[str]:
         names: set[str] = set()

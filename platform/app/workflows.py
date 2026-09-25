@@ -1167,6 +1167,15 @@ async def connection_test(db, site, job):
         try:
             async with await client_for(db, site, kind) as client:
                 result = await client.validate_connection()
+                if kind == 'wordpress':
+                    from app.authors import connection_fingerprint, unavailable
+                    try:
+                        import asyncio
+                        authors = await asyncio.wait_for(client.discover_authors(), timeout=25)
+                    except Exception:
+                        authors = unavailable('author_discovery_failed')
+                    result['author_discovery'] = {**authors, 'checked_at': iso(now()),
+                                                  'connection_fingerprint': connection_fingerprint(row)}
         except Exception:
             row.status,row.checked_at='error',now()
             db.commit()
@@ -1243,6 +1252,28 @@ async def connection_test(db, site, job):
             'read_only': True,
             'message': f'{kind} read-only access verified',
         }
+    elif kind == 'microsoft_graph':
+        from app.connectors.microsoft_graph import MicrosoftGraphMailClient
+        secret, config = credentials(db, site.id, kind)
+        try:
+            async with MicrosoftGraphMailClient(secret, config) as client:
+                result = await client.validate_connection()
+        except Exception:
+            row.status, row.checked_at = 'error', now()
+            row.capabilities = {**(row.capabilities or {}), 'last_connection_test': {
+                'status': 'error', 'read_only': True, 'tested_at': iso(now()),
+            }}
+            db.commit()
+            raise ValueError('Microsoft 365 authentication failed; review the connection settings') from None
+        row.status, row.checked_at = 'connected', now()
+        row.capabilities = {**(row.capabilities or {}), 'last_connection_test': {
+            'status': 'authenticated', 'read_only': True, 'tested_at': iso(now()),
+            'mailbox_authorization': 'unverified', 'delivery': 'not_tested',
+        }}
+        db.commit()
+        return {'kind': kind, 'status': 'authenticated', 'read_only': True,
+                'mailbox_authorization': 'unverified', 'delivery': 'not_tested',
+                'message': 'Microsoft 365 authentication checked; no email was sent'}
     elif kind == 'ai':
         # An explicit OpenAI Responses configuration can be checked with the
         # provider's read-only model list.  This must not run a paid web-search
@@ -1547,30 +1578,9 @@ def _content_autopilot_unique(values: list[str]) -> list[str]:
 
 
 def _content_autopilot_author_ids(site, policy, wordpress) -> tuple[set[str], str | None]:
-    """Derive only explicitly verified author identifiers for this run.
-
-    A policy author is not trusted merely because it is a string. It must be
-    present in the confirmed business author list or match the authenticated
-    WordPress user returned by a prior capability verification.
-    """
-
-    verified: set[str] = set()
-    facts = site.facts if isinstance(site.facts, dict) else {}
-    authors = facts.get('authors')
-    if isinstance(authors, list):
-        for author in authors:
-            if isinstance(author, dict):
-                value = author.get('id') or author.get('author_id')
-            else:
-                value = author
-            if isinstance(value, (str, int)) and str(value).strip():
-                verified.add(str(value).strip())
-    capabilities = wordpress.capabilities if wordpress is not None and isinstance(wordpress.capabilities, dict) else {}
-    authenticated = capabilities.get('authenticated_author')
-    if isinstance(authenticated, dict):
-        value = authenticated.get('id')
-        if isinstance(value, (str, int)) and str(value).strip():
-            verified.add(str(value).strip())
+    """Only a recent authenticated observation can verify the policy's choice."""
+    from app.authors import author_ids, current_authors
+    verified = author_ids(current_authors(wordpress))
 
     configured = None
     if policy is not None and isinstance(policy.settings, dict):
@@ -1579,7 +1589,7 @@ def _content_autopilot_author_ids(site, policy, wordpress) -> tuple[set[str], st
             configured = str(value).strip()
     if configured and configured in verified:
         return verified, configured
-    return verified, next(iter(sorted(verified)), None)
+    return verified, None
 
 
 def _content_autopilot_preflight(db, site) -> dict[str, Any]:
@@ -1842,6 +1852,12 @@ async def content_autopilot(db, site, job):
         return job.result
 
     preflight = _content_autopilot_preflight(db, site)
+    if preflight['blockers'] and set(preflight['blockers']) == {'author_unverified'}:
+        # Preserve local pause/budget gates before making even a read-only
+        # connection call. Old facts and inventory are never author authority.
+        from app.authors import refresh_authors
+        await refresh_authors(db, site)
+        preflight = _content_autopilot_preflight(db, site)
     event(db, site, 'content_autopilot_started', 'Content autopilot started', {
         'job_id': job.id,
         'policy_version': preflight.get('policy_version'),
@@ -2479,7 +2495,7 @@ async def generate(db, site, job):
     article.sources = generated.get('sources',article.sources)
     article.brief = {**article.brief, 'generation':generated.get('provenance',{})}
     article.updated_at = now()
-    article.checks = check_article(record(article), site.facts, [record(p) for p in db.scalars(select(Page).where(Page.site_id == site.id))])
+    article.checks = await checked_article(db, site, article)
     article.status = 'checked' if article.checks['passed'] else 'review_needed'
     event(db, site, 'article_generated', f'Draft prepared: {article.title}', {'article_id':article.id,'checks':article.checks})
     return {'article_id':article.id, 'status':article.status,'checks':article.checks,'cost_status':cost_status,'reservation_id':reservation.id}
@@ -2915,7 +2931,17 @@ def publication_target(site, article, source=None):
     return target
 
 
+async def checked_article(db, site, article, *, exclude_page_id=None):
+    from app.authors import apply_author_check, refresh_authors, unavailable
+    from app.intelligence.content import check_article
+    observation = await refresh_authors(db, site) if article.author_id else unavailable('missing_author')
+    pages = [record(p) for p in db.scalars(select(Page).where(Page.site_id == site.id))
+             if p.id != exclude_page_id]
+    return apply_author_check(check_article(record(article), site.facts, pages), article.author_id, observation)
+
+
 async def publish(db, site, job):
+    from app.authors import AuthorVerificationError, require_current_author
     from app.intelligence.content import check_article
     article = scoped(db, Article, job.payload.get('article_id'), site)
     if isinstance(article.brief,dict) and article.brief.get('purpose') == 'refresh_existing':
@@ -2940,7 +2966,7 @@ async def publish(db, site, job):
                       Publication.article_id.is_not(None), Publication.status == 'published', Publication.created_at >= week_start))
     if count >= policy.settings.get('posts_per_week',2):
         raise ValueError('Weekly publication limit reached')
-    checks = check_article(record(article), site.facts, [record(p) for p in db.scalars(select(Page).where(Page.site_id == site.id))])
+    checks = await checked_article(db, site, article)
     article.checks = checks
     if not checks['passed']:
         article.status = 'review_needed'
@@ -2966,6 +2992,8 @@ async def publish(db, site, job):
                 if pub.snapshot.get('create_started'):
                     draft=await client.reconcile_draft(draft_payload,op_key)
                 else:
+                    await require_current_author(client, author)
+                    authorize(db, site, 'publish', publication_target(site, article))
                     pub.snapshot={**pub.snapshot,'create_started':iso(now())}
                     db.commit()
                     draft = await client.create_draft(draft_payload, op_key)
@@ -2980,6 +3008,8 @@ async def publish(db, site, job):
             if draft.get('status') not in ('draft','publish'):
                 raise SourceConflict('draft_or_publish',draft.get('status'),resource_key=draft['resource_key'])
             if draft.get('status') != 'publish':
+                await require_current_author(client, author)
+                authorize(db, site, 'publish', publication_target(site, article, draft))
                 await client.publish(
                     pub.remote_id,
                     expected_hash=draft['source_hash'],
@@ -3003,6 +3033,12 @@ async def publish(db, site, job):
             pub.updated_at = article.updated_at = now()
             event(db, site, 'article_published', f'Published and verified: {article.title}', {'article_id':article.id,'publication_id':pub.id,**pub.result})
             return pub.result
+        except AuthorVerificationError:
+            article.status, pub.status = 'review_needed', 'failed'
+            pub.result = {'status': 'blocked', 'blocker': 'author_not_verified'}
+            pub.updated_at = now()
+            db.commit()
+            raise ValueError('Publication stopped because the author is no longer verified') from None
         except Exception as exc:
             article.status = 'failed'
             # An ambiguous/transport timeout means the remote write may have
@@ -3079,11 +3115,7 @@ async def apply_refresh(db, site, job, article):
     expected_hash = brief.get('source_hash')
     if not isinstance(expected_hash, str) or not expected_hash:
         raise ValueError('Refresh draft has no source snapshot')
-    checks = check_article(
-        record(article),
-        site.facts,
-        [record(row) for row in db.scalars(select(Page).where(Page.site_id == site.id, Page.id != page.id))],
-    )
+    checks = await checked_article(db, site, article, exclude_page_id=page.id)
     article.checks = checks
     if not checks['passed']:
         article.status = 'review_needed'

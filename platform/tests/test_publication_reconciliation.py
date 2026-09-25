@@ -2,12 +2,14 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select
 
 from app import worker, workflows
 from app.connectors.errors import AmbiguousOutcome, ConnectorError
+from app.connectors.security import encrypt_credentials
 from app.config import settings
 from app.models import Article, Connection, Job, Publication, Site
 from app.policies import create_policy
@@ -22,12 +24,12 @@ def _seed_ambiguous(factory, site_id, *, remote_id=None):
         site.facts = {
             "business_name": "Independent test",
             "services": ["Repairs"],
-            "authors": [{"id": "author-1", "name": "Fixture writer"}],
+            "authors": [{"id": "1", "name": "Fixture writer"}],
         }
         policy = create_policy(db, site, None, {
             "enabled": True,
             "allowed_actions": ["publish"],
-            "author_id": "author-1",
+            "author_id": "1",
             "posts_per_week": 1,
         })
         article = Article(
@@ -35,7 +37,7 @@ def _seed_ambiguous(factory, site_id, *, remote_id=None):
             title="Prepare for a repair visit",
             slug="prepare-for-a-repair-visit",
             body="<p>Bring your repair questions.</p>",
-            author_id="author-1",
+            author_id="1",
             status="failed",
             checks={"passed": True, "blockers": [], "warnings": []},
             managed=True,
@@ -117,7 +119,7 @@ def _remote_record(*, status="draft", remote_id="7"):
         "title": "Prepare for a repair visit",
         "body": "<p>Bring your repair questions.</p>",
         "slug": "prepare-for-a-repair-visit",
-        "author_id": "author-1",
+        "author_id": "1",
         "status": status,
         "source_hash": f"source-{status}",
     }
@@ -349,7 +351,7 @@ def test_ambiguous_publish_does_not_rollback_a_possible_remote_success(platform,
         "title": "Prepare for a repair visit",
         "body": "<p>Bring your repair questions.</p>",
         "slug": "prepare-for-a-repair-visit",
-        "author_id": "author-1",
+        "author_id": "1",
         "status": "draft",
         "source_hash": "draft-source",
     }
@@ -361,6 +363,15 @@ def test_ambiguous_publish_does_not_rollback_a_possible_remote_success(platform,
 
         async def __aexit__(self, *args):
             return None
+
+        async def discover_authors(self):
+            return {
+                "items": [{"id": "1", "name": "Fixture Writer"}],
+                "complete": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "authenticated_user_id": "1",
+                "blockers": [],
+            }
 
         async def create_draft(self, _article, _operation_key):
             return dict(remote)
@@ -406,12 +417,12 @@ def test_ambiguous_publish_does_not_rollback_a_possible_remote_success(platform,
         site.facts = {
             "business_name": "Independent test",
             "services": ["Repairs"],
-            "authors": [{"id": "author-1", "name": "Fixture writer"}],
+            "authors": [{"id": "1", "name": "Fixture writer"}],
         }
         policy = create_policy(db, site, None, {
             "enabled": True,
             "allowed_actions": ["publish"],
-            "author_id": "author-1",
+            "author_id": "1",
             "posts_per_week": 1,
         })
         article = Article(
@@ -429,7 +440,10 @@ def test_ambiguous_publish_does_not_rollback_a_possible_remote_success(platform,
         db.add(Connection(
             site_id=site_id,
             kind="wordpress",
-            encrypted_credentials="opaque-fixture-credentials",
+            encrypted_credentials=encrypt_credentials(
+                {"username": "fixture", "application_password": "offline-fixture"},
+                settings.ENCRYPTION_KEY,
+            ),
             status="connected",
             capabilities={"authenticated": True, "native": {"create": True, "publish": True}},
         ))
