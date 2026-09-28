@@ -966,6 +966,55 @@ def test_audit_records_sitemap_404_as_finding_without_degrading_audit_cadence(pl
         )).status == 'resolved'
 
 
+def test_audit_reclassifies_historical_asset_without_losing_its_evidence(platform, monkeypatch):
+    import asyncio
+    from app import workflows
+
+    client, factory, site_id = platform
+    with factory() as db:
+        site = db.get(Site, site_id)
+        asset_url = site.origin + '/photo.webp'
+        legacy_page = Page(
+            site_id=site_id, resource_key='url:old-photo', url=asset_url,
+            resource_type='discovered_page', title='', source_hash='old',
+        )
+        db.add(legacy_page)
+        db.flush()
+        old_finding = Finding(
+            site_id=site_id, page_id=legacy_page.id,
+            key='url:old-photo:page_unavailable', code='page_unavailable',
+            severity='high', title='Page could not be checked', status='open',
+            first_seen_at=now(), last_seen_at=now(),
+        )
+        db.add(old_finding)
+        db.commit()
+        page_id, finding_id = legacy_page.id, old_finding.id
+
+    async def asset_crawl(origin, max_pages=100, transport=None, seed_urls=None, visited_urls=None):
+        return {
+            'pages': [],
+            'assets': [{'url': asset_url, 'status_code': 200, 'content_type': 'image/webp'}],
+            'complete': True, 'pending_urls': [], 'visited_urls': [asset_url], 'errors': [],
+        }
+
+    monkeypatch.setattr('app.intelligence.audit.crawl', asset_crawl)
+    with factory() as db:
+        site = db.get(Site, site_id)
+        result = asyncio.run(workflows.audit(db, site, Job(
+            id='asset-recheck', site_id=site_id, payload={'skip_inventory': True},
+        )))
+        db.commit()
+        historical = db.get(Page, page_id)
+        assert historical.resource_type == 'non_html_asset'
+        assert historical.signals['content_type'] == 'image/webp'
+        assert db.get(Finding, finding_id).status == 'resolved'
+        assert result['assets'][0]['url'] == asset_url
+        assert result['errors'] == []
+
+    assert client.get(f'/api/v1/sites/{site_id}/pages').json()['total'] == 0
+    assert client.get(f'/api/v1/sites/{site_id}/overview').json()['counts']['pages'] == 0
+
+
 def test_audit_deduplicates_browser_samples_for_duplicate_crawl_urls(platform, monkeypatch):
     import asyncio
     from app import workflows

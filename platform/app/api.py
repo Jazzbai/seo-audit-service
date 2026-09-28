@@ -520,7 +520,7 @@ def overview(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
         coverage_status = 'complete_with_errors'
     else:
         coverage_status = 'complete'
-    return {"site": record(site), "counts": {"pages": count(Page), "open_findings": count(Finding, Finding.status == 'open'),
+    return {"site": record(site), "counts": {"pages": count(Page, Page.resource_type != 'non_html_asset'), "open_findings": count(Finding, Finding.status == 'open'),
             "pending_candidates": count(Candidate, Candidate.status.in_(['pending', 'approved'])),
             "published_articles": count(Article, Article.status == 'published'), "open_incidents": count(Incident, Incident.status == 'open')},
             "monitoring": {**monitoring_status(db, site_id=site_id), "site_paused": site.paused}, "budget": budget,
@@ -755,7 +755,8 @@ for path, cls in [('pages', Page), ('findings', Finding), ('candidates', Candida
     }[cls]
     router.add_api_route(
         '/sites/{site_id}/' + path,
-        collection_route(cls, transform=transform),
+        collection_route(cls, extra_filter=Page.resource_type != 'non_html_asset' if cls is Page else None,
+                         transform=transform),
         methods=['GET'],
         name='list_' + path,
     )

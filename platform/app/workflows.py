@@ -930,6 +930,26 @@ async def audit(db, site, job):
         visited_urls=payload.get('visited_urls') if 'visited_urls' in payload else None,
     )
     sources = {p.url.rstrip('/'): p for p in db.scalars(select(Page).where(Page.site_id == site.id))}
+    # An older crawl may have recorded a successfully fetched image as a
+    # discovered page with a false page_unavailable finding. Preserve that
+    # historical URL row, but reclassify it and resolve its source findings
+    # only when this crawl positively identifies the response as an asset.
+    for asset in result.get('assets', []):
+        if not isinstance(asset, dict) or not isinstance(asset.get('url'), str):
+            continue
+        legacy_page = sources.get(asset['url'].rstrip('/'))
+        if legacy_page is None or legacy_page.resource_type != 'discovered_page':
+            continue
+        upsert_observation(db, site, legacy_page, {
+            'signals': {
+                'observation_type': 'non_html_asset',
+                'status_code': asset.get('status_code'),
+                'content_type': asset.get('content_type'),
+                'observed_at': iso(now()),
+            },
+            'findings': [],
+        })
+        legacy_page.resource_type = 'non_html_asset'
     checked = 0
     rendered_candidates = []
     for item in result['pages']:
