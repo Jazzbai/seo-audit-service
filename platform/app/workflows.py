@@ -16,7 +16,7 @@ from app.config import settings
 from app.models import (Article, Candidate, Connection, Finding, Incident, Job,
                         Measurement, Page, Publication, Revision, Site)
 from app.network import fetch
-from app.operations import credentials, enqueue, event, find_connection, global_controls, iso, now, record
+from app.operations import credentials, enqueue, event, find_connection, global_controls, iso, now, record, sync_health_incident
 from app.policies import current_policy, evaluate_policy
 from app.connectors.errors import AmbiguousOutcome, ConnectorError, ResourceNotFound, SourceConflict
 
@@ -1003,14 +1003,21 @@ async def audit(db, site, job):
         )
         browser_jobs.append(browser_job.id)
     pending_urls = result.get('pending_urls', [])
-    errors = result.get('errors', [])
+    batch_errors = result.get('errors', [])
     assets = result.get('assets', [])
     if not isinstance(pending_urls, list):
         pending_urls = []
-    if not isinstance(errors, list):
-        errors = []
+    if not isinstance(batch_errors, list):
+        batch_errors = ['Audit returned invalid error evidence']
     if not isinstance(assets, list):
         assets = []
+    prior_errors = payload.get('audit_errors', [])
+    if not isinstance(prior_errors, list):
+        prior_errors = ['Audit continuation error evidence was invalid']
+    errors = list(dict.fromkeys(
+        value[:500] for value in [*prior_errors, *batch_errors]
+        if isinstance(value, str) and value
+    ))[:100]
     # A crawl that has no pending queue but did record transport/HTTP errors
     # is not strong enough evidence to resolve a prior site-scope finding.
     reconciliation_complete = bool(result.get('complete', False)) and not pending_urls and not errors
@@ -1022,6 +1029,11 @@ async def audit(db, site, job):
     reconciliation['crawl_complete'] = bool(result.get('complete', False))
     reconciliation['resolution_allowed'] = reconciliation_complete
     _upsert_site_reconciliation(db, site, reconciliation, complete=reconciliation_complete)
+    if reconciliation_complete:
+        sync_health_incident(
+            db, site, key='audit:discovery_incomplete', healthy=True,
+            title='Audit could not complete after bounded retries', kind='audit',
+        )
     continuation_job_id = None
     if not result.get('complete', False):
         retry = payload.get('cursor_retry', 0)
@@ -1036,6 +1048,7 @@ async def audit(db, site, job):
             'seed_urls': pending_urls,
             'visited_urls': visited_urls,
             'reconciliation_pages': reconciliation_records[-1000:],
+            'audit_errors': errors,
             'cursor_retry': next_retry,
         }
         # A changing frontier continues immediately; a stalled frontier or

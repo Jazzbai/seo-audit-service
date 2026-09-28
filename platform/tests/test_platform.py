@@ -825,6 +825,47 @@ def test_fresh_audit_does_not_reuse_a_completed_continuation_from_an_older_run(p
         assert new_continuation.idempotency_key != old_continuation.idempotency_key
 
 
+def test_earlier_batch_transport_error_cannot_be_hidden_by_a_clean_final_batch(platform, monkeypatch):
+    import asyncio
+    from app import operations, workflows
+
+    async def fake_crawl(origin, max_pages=100, transport=None, seed_urls=None, visited_urls=None):
+        if seed_urls is None:
+            return {
+                'pages': [{
+                    'url': origin + '/unavailable', 'html': '',
+                    'status_code': 500, 'error': 'HTTP 500',
+                }],
+                'complete': False,
+                'pending_urls': [origin + '/next'],
+                'visited_urls': [origin + '/unavailable'],
+                'errors': [origin + '/unavailable: HTTP 500'],
+            }
+        return {
+            'pages': [],
+            'complete': True,
+            'pending_urls': [],
+            'visited_urls': [origin + '/unavailable', origin + '/next'],
+            'errors': [],
+        }
+
+    monkeypatch.setattr('app.intelligence.audit.crawl', fake_crawl)
+    _, factory, site_id = platform
+    with factory() as db:
+        site = db.get(Site, site_id)
+        first = asyncio.run(workflows.audit(db, site, Job(id='error-root', site_id=site_id, payload={})))
+        continuation = db.get(Job, first['continuation_job_id'])
+        assert continuation.payload['audit_errors'] == [site.origin + '/unavailable: HTTP 500']
+
+        last = asyncio.run(workflows.audit(db, site, continuation))
+        assert last['complete'] is True
+        assert last['errors'] == [site.origin + '/unavailable: HTTP 500']
+        assert last['reconciliation']['resolution_allowed'] is False
+        continuation.status = 'complete'
+        continuation.result = last
+        assert operations._job_cadence_state(continuation) == 'partial'
+
+
 def test_audit_stops_after_bounded_retries_when_pending_frontier_never_moves(platform, monkeypatch):
     import asyncio
     from app import workflows
@@ -889,6 +930,12 @@ def test_audit_records_sitemap_404_as_finding_without_degrading_audit_cadence(pl
     _, factory, site_id = platform
     with factory() as db:
         site = db.get(Site, site_id)
+        db.add(Incident(
+            site_id=site_id, key='audit:discovery_incomplete', kind='audit',
+            severity='high',
+            title='Audit could not complete after bounded retries',
+            status='open', first_seen_at=now(), last_seen_at=now(),
+        ))
         job = Job(
             id='sitemap-404-audit', site_id=site_id, kind='audit', status='running',
             payload={}, idempotency_key='sitemap-404-audit',
@@ -913,6 +960,10 @@ def test_audit_records_sitemap_404_as_finding_without_degrading_audit_cadence(pl
         assert missing.status == 'open'
         assert db.get(Page, missing.page_id).url == site.origin + '/preview/'
         assert operations.monitoring_status(db, site_id=site_id)['cadence']['audit']['status'] == 'healthy'
+        assert db.scalar(select(Incident).where(
+            Incident.site_id == site_id,
+            Incident.key == 'audit:discovery_incomplete',
+        )).status == 'resolved'
 
 
 def test_audit_deduplicates_browser_samples_for_duplicate_crawl_urls(platform, monkeypatch):
