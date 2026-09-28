@@ -122,3 +122,26 @@ duplicate deployment was submitted after local navigation timeouts.
 `forgeseo@eit.care` is the owner's intended sender, not a proven connected mailbox.
 No test recipient has been approved yet, and no email was sent. Remaining owner
 decisions: mailbox/Entra setup, recipient and receipt, and article author selection.
+
+## Follow-up: pilot byline and preparation handoff, September 28
+
+This section records later production evidence; the September 25 observations
+above remain historical. The preparation objective is satisfied, but **live
+publication is still NO-GO** pending a separate launch decision. No article was
+published, no existing article body or main page was edited, and no paid provider
+request was made during this follow-up.
+
+| Gate | September 28 evidence | State |
+| --- | --- | --- |
+| Current WordPress author | Owner identified WordPress user 1 and removed the other two authorized accounts. A separate user 5, `Auto One Stop Guide`, was created as a Contributor with a unique Gmail plus-address and a random password that was not retained. Direct authenticated WordPress read-back shows user 1 still Administrator and user 5 Contributor. Fresh ForgeSEO discovery returns only IDs 1 and 5, with complete coverage and no blockers. This is a branded byline, not a claim that a fictional person wrote the article. | Verified |
+| Retained article | Article `b1f0fb8a5cb647998fefc7c3b166f727` now has `author_id=5`, status `checked`, `passed=true`, no blockers or warnings. Its original title, 3,418-character body, and three source records were unchanged by the author save; all three revision-bound source reviews remain accepted. Reviews expire after seven days or a source/body/title/generation change. | Verified for the current revision |
+| Microsoft 365 notification | Microsoft Graph connection is connected, owner mailbox-scope review is recorded, and notification test job `dbb0757c1cef4b64b08f2a204faa2881` is complete with Graph acceptance and owner-confirmed recipient receipt. Weekly digest remains off. Scope is owner-attested, not independently machine-proven. | Verified within those evidence limits |
+| Independent recovery keys | The owner's independently held copy matched both deployed keys and authenticated the retained archive, artifacts and encrypted connection records on September 25, as documented above. No new backup or restore drill was performed in this follow-up. | Prior verification retained; refresh before live launch if required |
+| One-article policy and publication safety | Policy version 3 still selects only the retained article, is disabled, and has no allowed actions. Site pause and global pause remain on. Production reports zero publications and zero published articles. | Verified paused |
+| Monitoring and site audit | Monitoring remains degraded. A September 28 read-only audit found the public-sitemap URL `/wpbc-bfb-preview/` returning HTTP 404. Its continuation chain reused a completed September 24 job; a prior audit also counted a `.webp` asset as a page error. These are separate site and platform findings, not evidence of thousands of independent failed audits. | Needs next bounded reliability milestone |
+| Live launch authority | The owner has not approved unpausing, spending on providers, or publishing this article. | NO-GO |
+
+Next bounded milestone: fix fresh-audit continuation identity and page-versus-asset
+accounting, keep genuine site 404s as findings rather than hiding them, verify
+accurate monitoring with regression tests and a new read-only audit, then issue a
+fresh go/no-go report. The limited publication decision remains separate.

@@ -13,7 +13,7 @@ from app.auth import get_db
 from app.config import settings
 from app.connectors.security import encrypt_credentials
 from app.main import app
-from app.models import Article, Base, Candidate, Connection, Finding, Heartbeat, Job, Measurement, Page, Site, Team
+from app.models import Article, Base, Candidate, Connection, Finding, Heartbeat, Incident, Job, Measurement, Page, Site, Team
 from app.operations import enqueue, now
 from app.workflows import upsert_observation
 
@@ -792,6 +792,127 @@ def test_audit_continues_bounded_crawl_without_restarting_or_claiming_completion
         assert calls[0]['seed_urls'] is None
         assert calls[1]['seed_urls']==[site.origin+'/next']
         assert calls[1]['visited_urls']==[site.origin+'/']
+
+
+def test_fresh_audit_does_not_reuse_a_completed_continuation_from_an_older_run(platform, monkeypatch):
+    import asyncio
+    from app import workflows
+
+    async def fake_crawl(origin, max_pages=100, transport=None, seed_urls=None, visited_urls=None):
+        return {
+            'pages': [],
+            'complete': False,
+            'pending_urls': [origin + '/next'],
+            'visited_urls': [origin + '/'],
+            'errors': [],
+        }
+
+    monkeypatch.setattr('app.intelligence.audit.crawl', fake_crawl)
+    _, factory, site_id = platform
+    with factory() as db:
+        site = db.get(Site, site_id)
+        first = asyncio.run(workflows.audit(db, site, Job(id='first-root', site_id=site_id, payload={})))
+        old_continuation = db.get(Job, first['continuation_job_id'])
+        old_continuation.status = 'complete'
+        old_continuation.result = {'complete': True, 'pending_urls': [], 'errors': []}
+        db.commit()
+
+        second = asyncio.run(workflows.audit(db, site, Job(id='second-root', site_id=site_id, payload={})))
+        new_continuation = db.get(Job, second['continuation_job_id'])
+        assert new_continuation.id != old_continuation.id
+        assert new_continuation.payload == old_continuation.payload
+        assert new_continuation.status == 'queued'
+        assert new_continuation.idempotency_key != old_continuation.idempotency_key
+
+
+def test_audit_stops_after_bounded_retries_when_pending_frontier_never_moves(platform, monkeypatch):
+    import asyncio
+    from app import workflows
+
+    async def stalled_crawl(origin, max_pages=100, transport=None, seed_urls=None, visited_urls=None):
+        return {
+            'pages': [],
+            'complete': False,
+            'pending_urls': [origin + '/'],
+            'visited_urls': [],
+            'errors': ['robots.txt returned HTTP 403'],
+        }
+
+    monkeypatch.setattr('app.intelligence.audit.crawl', stalled_crawl)
+    _, factory, site_id = platform
+    with factory() as db:
+        site = db.get(Site, site_id)
+        job = Job(id='stalled-root', site_id=site_id, payload={})
+        seen = set()
+        for _ in range(8):
+            result = asyncio.run(workflows.audit(db, site, job))
+            next_id = result['continuation_job_id']
+            if next_id is None:
+                break
+            assert next_id not in seen
+            seen.add(next_id)
+            job = db.get(Job, next_id)
+        else:
+            pytest.fail('A stalled audit continued without a bound')
+        assert len(seen) == 4
+        assert result['complete'] is False
+        assert db.scalar(select(Incident).where(
+            Incident.site_id == site_id,
+            Incident.key == 'audit:discovery_incomplete',
+        )) is not None
+
+
+def test_audit_records_sitemap_404_as_finding_without_degrading_audit_cadence(platform, monkeypatch):
+    import asyncio
+    from app import operations, workflows
+
+    async def crawl_with_missing_page(origin, max_pages=100, transport=None, seed_urls=None, visited_urls=None):
+        return {
+            'pages': [{
+                'url': origin + '/preview/',
+                'html': '',
+                'status_code': 404,
+                'error': 'HTTP 404',
+            }],
+            'assets': [{
+                'url': origin + '/photo.webp',
+                'status_code': 200,
+                'content_type': 'image/webp',
+            }],
+            'complete': True,
+            'pending_urls': [],
+            'visited_urls': [origin + '/preview/', origin + '/photo.webp'],
+            'errors': [],
+        }
+
+    monkeypatch.setattr('app.intelligence.audit.crawl', crawl_with_missing_page)
+    _, factory, site_id = platform
+    with factory() as db:
+        site = db.get(Site, site_id)
+        job = Job(
+            id='sitemap-404-audit', site_id=site_id, kind='audit', status='running',
+            payload={}, idempotency_key='sitemap-404-audit',
+        )
+        db.add(job)
+        db.flush()
+        result = asyncio.run(workflows.audit(db, site, job))
+        job.status = 'complete'
+        job.result = result
+        job.updated_at = now()
+        db.commit()
+
+        assert result['complete'] is True
+        assert result['errors'] == []
+        assert result['assets'][0]['url'] == site.origin + '/photo.webp'
+        assert db.scalar(select(Page).where(Page.site_id == site_id, Page.url == site.origin + '/photo.webp')) is None
+        missing = db.scalar(select(Finding).where(
+            Finding.site_id == site_id,
+            Finding.code == 'page_unavailable',
+        ))
+        assert missing is not None
+        assert missing.status == 'open'
+        assert db.get(Page, missing.page_id).url == site.origin + '/preview/'
+        assert operations.monitoring_status(db, site_id=site_id)['cadence']['audit']['status'] == 'healthy'
 
 
 def test_audit_deduplicates_browser_samples_for_duplicate_crawl_urls(platform, monkeypatch):

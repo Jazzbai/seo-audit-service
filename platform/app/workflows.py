@@ -1004,10 +1004,13 @@ async def audit(db, site, job):
         browser_jobs.append(browser_job.id)
     pending_urls = result.get('pending_urls', [])
     errors = result.get('errors', [])
+    assets = result.get('assets', [])
     if not isinstance(pending_urls, list):
         pending_urls = []
     if not isinstance(errors, list):
         errors = []
+    if not isinstance(assets, list):
+        assets = []
     # A crawl that has no pending queue but did record transport/HTTP errors
     # is not strong enough evidence to resolve a prior site-scope finding.
     reconciliation_complete = bool(result.get('complete', False)) and not pending_urls and not errors
@@ -1023,30 +1026,36 @@ async def audit(db, site, job):
     if not result.get('complete', False):
         retry = payload.get('cursor_retry', 0)
         retry = retry if isinstance(retry, int) and not isinstance(retry, bool) and retry >= 0 else 0
+        visited_urls = result.get('visited_urls', [])
+        stalled = (continuation and bool(pending_urls)
+                   and pending_urls == payload.get('seed_urls')
+                   and visited_urls == payload.get('visited_urls'))
+        next_retry = retry + 1 if stalled or not pending_urls else 0
         cursor = {
             'max_pages': batch_size,
             'seed_urls': pending_urls,
-            'visited_urls': result.get('visited_urls', []),
+            'visited_urls': visited_urls,
             'reconciliation_pages': reconciliation_records[-1000:],
-            'cursor_retry': retry + (0 if pending_urls else 1),
+            'cursor_retry': next_retry,
         }
-        # A crawl with pending URLs is continued immediately. If discovery or
-        # transport errors left no pending URL, retry the same cursor only a
-        # bounded number of times; an empty queue is not completion evidence.
-        can_retry = bool(pending_urls) or retry < 3
+        # A changing frontier continues immediately; a stalled frontier or
+        # incomplete discovery with an empty queue gets bounded retries.
+        can_retry = next_retry <= 3
         if can_retry:
-            continuation_key = 'audit:continuation:' + digest(cursor)
+            # A cursor can recur in a later fresh audit. Include the parent
+            # job identity so it cannot attach to an old completed job.
+            continuation_key = f'audit:continuation:{job.id}:' + digest(cursor)
             continuation_job = enqueue(db, site, 'audit', cursor, continuation_key)
-            if not pending_urls:
+            if next_retry and continuation_job.status == 'queued':
                 continuation_job.available_at = now() + timedelta(seconds=min(300, 30 * (2 ** retry)))
                 db.commit()
             continuation_job_id = continuation_job.id
         else:
             incident(db, site, 'audit:discovery_incomplete', 'Audit could not complete after bounded retries',
-                     kind='audit', severity='high', details={'errors': errors, 'visited_urls': result.get('visited_urls', [])})
+                     kind='audit', severity='high', details={'errors': errors, 'visited_urls': visited_urls})
     event(db, site, 'audit_complete', f'Audit batch checked {checked} pages',
           {'complete':result['complete'], 'pending_urls':len(pending_urls), 'continuation_job_id':continuation_job_id,
-           'errors':errors, 'reconciliation': {
+           'errors':errors, 'non_html_resources':len(assets), 'reconciliation': {
                'pages_considered': reconciliation['pages_considered'],
                'duplicate_url_groups': len(reconciliation['duplicate_urls']),
                'redirects': len(reconciliation['redirects']),
@@ -1105,7 +1114,8 @@ async def audit(db, site, job):
                     enqueue(db, site, 'candidate', {'candidate_id':candidate.id}, f'candidate:{candidate.id}')
     output = {'complete':result['complete'],'checked_pages':checked,'pending_urls':pending_urls,
               'visited_urls':result.get('visited_urls',[]),'continuation_job_id':continuation_job_id,
-              'browser_job_ids':browser_jobs,'errors':errors,'reconciliation':reconciliation}
+              'browser_job_ids':browser_jobs,'errors':errors,'assets':assets[:batch_size],
+              'reconciliation':reconciliation}
     if metadata_execution is not None:
         output['metadata_execution'] = metadata_execution
     return output

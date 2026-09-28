@@ -1448,9 +1448,14 @@ def _sitemap_locations(body: str) -> list[str]:
     if SafeET is not None:
         try:
             root = SafeET.fromstring(body.encode("utf-8", errors="ignore"))
-            for node in root.iter():
-                if node.tag.rsplit("}", 1)[-1].casefold() == "loc" and node.text:
-                    values.append(_normalized_text(unescape(node.text)))
+            # Only document and nested-sitemap URLs belong in the page queue.
+            # Image/video sitemap extensions also contain <loc> children.
+            for entry in root:
+                if entry.tag.rsplit("}", 1)[-1].casefold() not in {"url", "sitemap"}:
+                    continue
+                for node in entry:
+                    if node.tag.rsplit("}", 1)[-1].casefold() == "loc" and node.text:
+                        values.append(_normalized_text(unescape(node.text)))
             if values:
                 return values
         except Exception:
@@ -1517,6 +1522,7 @@ async def crawl(
         raise TypeError("seed_urls and visited_urls must be iterable URL lists") from exc
 
     errors: list[str] = []
+    assets: list[dict[str, Any]] = []
     visited_order: list[str] = []
     visited: set[str] = set()
 
@@ -1540,6 +1546,7 @@ async def crawl(
     if seed_urls is not None and not raw_seeds:
         return {
             "pages": [],
+            "assets": [],
             "complete": not errors,
             "pending_urls": [],
             "visited_urls": visited_order,
@@ -1575,6 +1582,7 @@ async def crawl(
     if not queue:
         return {
             "pages": [],
+            "assets": [],
             "complete": not errors,
             "pending_urls": [],
             "visited_urls": visited_order,
@@ -1611,6 +1619,8 @@ async def crawl(
         async def fetch(
             url: str,
             max_bytes: int = _MAX_CRAWL_RESPONSE_BYTES,
+            *,
+            html_only: bool = False,
         ) -> tuple[str, int | None, str, str | None, str | None, list[str]]:
             current = url
             redirect_chain = [url]
@@ -1635,6 +1645,14 @@ async def crawl(
                             if normalized_target != redirect_chain[-1]:
                                 redirect_chain.append(normalized_target)
                             continue
+
+                        if html_only and 200 <= status < 300 and content_type and not (
+                            "text/html" in content_type.casefold()
+                            or "application/xhtml+xml" in content_type.casefold()
+                        ):
+                            # Classify assets from headers without downloading
+                            # potentially large binary bodies as HTML pages.
+                            return current, status, "", content_type, None, redirect_chain
 
                         declared_length = response.headers.get("content-length")
                         if declared_length:
@@ -1773,14 +1791,18 @@ async def crawl(
                     if link is not None:
                         enqueue(link)
 
-        while queue and len(pages) < page_limit and not robots_blocked:
+        inspected_count = 0
+        while queue and inspected_count < page_limit and not robots_blocked:
             requested_url = queue.popleft()
             if requested_url in visited:
                 continue
             if not rules.allows(requested_url):
                 continue
+            inspected_count += 1
             add_visited(requested_url)
-            final_url, status, body, content_type, fetch_error, redirect_chain = await fetch(requested_url)
+            final_url, status, body, content_type, fetch_error, redirect_chain = await fetch(
+                requested_url, html_only=True,
+            )
             if fetch_error:
                 pages.append(add_redirect_evidence(
                     {"url": requested_url, "html": "", "status_code": status, "error": fetch_error},
@@ -1809,16 +1831,18 @@ async def crawl(
                     requested_url,
                     redirect_chain,
                 ))
-                errors.append(f"{final_url}: {error}")
+                # A reachable missing/forbidden URL is a site finding, not a
+                # failed scheduler check. Rate limits and server failures do
+                # make this batch's crawl evidence incomplete.
+                if status in {408, 425, 429} or status >= 500:
+                    errors.append(f"{final_url}: {error}")
                 continue
             if not is_html:
-                error = "non-html response"
-                pages.append(add_redirect_evidence(
-                    {"url": final_url, "html": "", "status_code": status, "error": error},
-                    requested_url,
-                    redirect_chain,
-                ))
-                errors.append(f"{final_url}: {error}")
+                assets.append({
+                    "url": final_url,
+                    "status_code": status,
+                    "content_type": content_type,
+                })
                 continue
             final_canonical = _canonical_link(final_url, normalized_origin)
             if final_canonical:
@@ -1840,6 +1864,7 @@ async def crawl(
     complete = not pending_urls and not robots_blocked and not discovery_incomplete
     return {
         "pages": pages,
+        "assets": assets,
         "complete": complete,
         "pending_urls": pending_urls,
         "visited_urls": visited_order,

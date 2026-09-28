@@ -75,7 +75,7 @@ async def test_crawl_continuation_bounds_each_batch_and_carries_cursor_state():
 
 
 @pytest.mark.asyncio
-async def test_crawl_reports_http_and_missing_location_errors_without_false_page_success():
+async def test_crawl_keeps_missing_page_evidence_separate_from_redirect_failures():
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             return httpx.Response(404)
@@ -98,8 +98,92 @@ async def test_crawl_reports_http_and_missing_location_errors_without_false_page
     assert result["pending_urls"] == []
     assert {page["status_code"] for page in result["pages"]} == {302, 404}
     assert all(page["html"] == "" and page["error"] for page in result["pages"])
-    assert any("HTTP 404" in error for error in result["errors"])
+    assert not any("HTTP 404" in error for error in result["errors"])
     assert any("missing Location" in error for error in result["errors"])
+
+
+@pytest.mark.asyncio
+async def test_sitemap_404_is_page_finding_evidence_not_a_failed_crawl():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://example.test/sitemap.xml")
+        if request.url.path == "/sitemap.xml":
+            return httpx.Response(200, text=(
+                "<urlset><url><loc>https://example.test/preview/</loc></url></urlset>"
+            ))
+        if request.url.path == "/":
+            return httpx.Response(200, text=_html("Home", "Home"), headers={"content-type": "text/html"})
+        if request.url.path == "/preview/":
+            return httpx.Response(404, text="Not found", headers={"content-type": "text/html"})
+        raise AssertionError(request.url)
+
+    result = await crawl("https://example.test", max_pages=2, transport=httpx.MockTransport(handler))
+
+    assert result["complete"] is True
+    assert result["errors"] == []
+    assert {page["url"]: page["status_code"] for page in result["pages"]} == {
+        "https://example.test/": 200,
+        "https://example.test/preview/": 404,
+    }
+    assert result["pages"][1]["error"] == "HTTP 404"
+
+
+@pytest.mark.asyncio
+async def test_sitemap_image_locations_are_not_enqueued_as_pages():
+    requested: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(request.url.path)
+        if request.url.path == "/robots.txt":
+            return httpx.Response(200, text="Sitemap: https://example.test/sitemap.xml")
+        if request.url.path == "/sitemap.xml":
+            return httpx.Response(200, text=(
+                '<urlset xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">'
+                '<url><loc>https://example.test/</loc><image:image>'
+                '<image:loc>https://example.test/photo.webp</image:loc>'
+                '</image:image></url></urlset>'
+            ))
+        if request.url.path == "/":
+            return httpx.Response(200, text=_html("Home", "Home"), headers={"content-type": "text/html"})
+        raise AssertionError(request.url)
+
+    result = await crawl("https://example.test", max_pages=2, transport=httpx.MockTransport(handler))
+
+    assert result["complete"] is True
+    assert result["errors"] == []
+    assert requested == ["/robots.txt", "/sitemap.xml", "/"]
+    assert result["assets"] == []
+
+
+@pytest.mark.asyncio
+async def test_linked_non_html_asset_is_recorded_without_becoming_a_page_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in {"/robots.txt", "/sitemap.xml"}:
+            return httpx.Response(404)
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                text=_html("Home", "Home", links='<a href="/photo.webp">Photo</a>'),
+                headers={"content-type": "text/html"},
+            )
+        if request.url.path == "/photo.webp":
+            return httpx.Response(
+                200, content=b"binary", headers={
+                    "content-type": "image/webp", "content-length": "999999999",
+                },
+            )
+        raise AssertionError(request.url)
+
+    result = await crawl("https://example.test", max_pages=2, transport=httpx.MockTransport(handler))
+
+    assert result["complete"] is True
+    assert result["errors"] == []
+    assert [page["url"] for page in result["pages"]] == ["https://example.test/"]
+    assert result["assets"] == [{
+        "url": "https://example.test/photo.webp",
+        "status_code": 200,
+        "content_type": "image/webp",
+    }]
 
 
 @pytest.mark.asyncio
