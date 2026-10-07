@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Plus, Save, ShieldCheck, Users, X } from 'lucide-react'
 import { Badge, Button, EmptyState, ErrorState, Field, Notice, PageHeader, Panel } from '../components/ui'
 import { TimezoneSelect } from '../components/TimezoneSelect'
+import { ChipInput } from '../components/ChipInput'
 import { detailMessage, sitesApi } from '../lib/api'
 import { useAuth } from '../context/AppContext'
 import type { BusinessFacts, Site } from '../types'
@@ -113,32 +114,6 @@ function formFromSite(site: Site): BusinessFactsForm {
 
 function cleanList(values: string[]) {
   return values.map((value) => value.trim()).filter(Boolean)
-}
-
-function ChipEditor({ label, values, onChange, placeholder, hint, disabled = false }: { label: string; values: string[]; onChange: (values: string[]) => void; placeholder: string; hint?: string; disabled?: boolean }) {
-  const [draft, setDraft] = useState('')
-
-  function add(value: string) {
-    const next = value.trim()
-    if (next && !values.includes(next)) onChange([...values, next])
-    setDraft('')
-  }
-
-  function keyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter' || event.key === ',') {
-      event.preventDefault()
-      add(draft)
-    }
-    if (event.key === 'Backspace' && !draft && values.length && !disabled) onChange(values.slice(0, -1))
-  }
-
-  return <Field label={label} hint={hint}>
-    <div className="chip-input">
-      {values.map((value) => <span className="chip" key={value}>{value}<button type="button" aria-label={`Remove ${value}`} disabled={disabled} onClick={() => onChange(values.filter((item) => item !== value))}><X size={12} /></button></span>)}
-      <input aria-label={label} value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} onKeyDown={keyDown} onBlur={() => { if (!disabled) add(draft) }} placeholder={values.length ? 'Add another' : placeholder} />
-      <button type="button" className="icon-button" aria-label={`Add ${label.toLowerCase()}`} disabled={disabled} onClick={() => add(draft)}><Plus size={14} /></button>
-    </div>
-  </Field>
 }
 
 function AuthorEditor({ authors, onChange, disabled }: { authors: EditableAuthor[]; onChange: (authors: EditableAuthor[]) => void; disabled: boolean }) {
@@ -277,10 +252,10 @@ export function BusinessFactsPage() {
                 <Field label="Primary audience"><input value={form.audience} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, audience: event.target.value }))} placeholder="Only enter the audience you serve" /></Field>
                 <Field label="Language" hint="Use the site's primary language code or label."><input value={form.language} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, language: event.target.value }))} placeholder="e.g. en" /></Field>
                 <Field label="Timezone" hint="Choose the business's local timezone."><TimezoneSelect value={form.timezone} disabled={!canEdit} onChange={(timezone) => setForm((current) => ({ ...current, timezone }))} /></Field>
-                <ChipEditor label="Locations" values={form.locations} onChange={(locations) => setForm((current) => ({ ...current, locations }))} placeholder="Add a verified location" hint="Press Enter after each location." disabled={!canEdit} />
-                <ChipEditor label="Services" values={form.services} onChange={(services) => setForm((current) => ({ ...current, services }))} placeholder="Add a verified service" hint="Press Enter after each service." disabled={!canEdit} />
-                <ChipEditor label="Products" values={form.products} onChange={(products) => setForm((current) => ({ ...current, products }))} placeholder="Add a verified product" hint="Press Enter after each product." disabled={!canEdit} />
-                <ChipEditor label="Source references" values={form.confirmed_sources} onChange={(confirmed_sources) => setForm((current) => ({ ...current, confirmed_sources }))} placeholder="Add a trusted URL or source label" hint="Only add references you have actually confirmed." disabled={!canEdit} />
+                <ChipInput label="Locations" values={form.locations} onChange={(locations) => setForm((current) => ({ ...current, locations }))} placeholder="Add a verified location" disabled={!canEdit} />
+                <ChipInput label="Services" values={form.services} onChange={(services) => setForm((current) => ({ ...current, services }))} placeholder="Add a verified service" disabled={!canEdit} />
+                <ChipInput label="Products" values={form.products} onChange={(products) => setForm((current) => ({ ...current, products }))} placeholder="Add a verified product" disabled={!canEdit} />
+                <ChipInput label="Source references" values={form.confirmed_sources} onChange={(confirmed_sources) => setForm((current) => ({ ...current, confirmed_sources }))} placeholder="Add a trusted URL or source label" hint="Only add references you have actually confirmed." disabled={!canEdit} />
                 <AuthorEditor authors={form.authors} onChange={(authors) => setForm((current) => ({ ...current, authors }))} disabled={!canEdit} />
               </div>
               <div className="form-actions"><Button type="submit" disabled={saving || !canEdit}><Save size={15} /> {saving ? 'Saving facts…' : canEdit ? 'Save business facts' : 'Owner access required'}</Button></div>

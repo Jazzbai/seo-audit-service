@@ -143,7 +143,94 @@ test('timezone dropdown retains worldwide choices without the Intl enumeration A
   await installMocks(page)
   await page.goto('/sites/new')
   const timezone = page.getByRole('combobox', { name: 'Timezone' })
-  expect(await timezone.locator('option').count()).toBeGreaterThan(400)
+  await expect.poll(() => timezone.locator('option').count()).toBeGreaterThan(400)
   await timezone.selectOption('Australia/Sydney')
   await expect(timezone).toHaveValue('Australia/Sydney')
 })
+
+async function pasteList(page: Page, label: string, text: string) {
+  const input = page.getByRole('textbox', { name: label, exact: true })
+  await input.focus()
+  await input.evaluate((element, value) => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData('text/plain', value)
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }))
+  }, text)
+}
+
+test('onboarding accepts pasted comma and multiline lists across every chip field', async ({ page }) => {
+  const controls = await installMocks(page)
+  await page.goto('/sites/new')
+  await fillRequiredSiteFacts(page)
+  await pasteList(page, 'Brand tone', 'Friendly, Relaxing\nReliable, Friendly')
+  await pasteList(page, 'Locations', ' Houston, Katy\r\nSugar Land, , Houston ')
+  await pasteList(page, 'Services', 'Family dentistry,\nTeeth cleaning\r\nWhitening')
+  await pasteList(page, 'Products', 'Night guards\nToothbrushes, Night guards')
+  await pasteList(page, 'Authors', 'Dr. Alex Morgan, Dr. Jordan Lee\nDr. Alex Morgan')
+  await pasteList(page, 'Confirmed sources', 'https://northstar.example/about\nOwner interview, https://northstar.example/about')
+  await expect(page.getByRole('button', { name: 'Remove Houston', exact: true })).toHaveCount(1)
+  await page.getByRole('button', { name: 'Create site' }).click()
+  await expect(page).toHaveURL(/\/sites\/site-new\/overview$/)
+  expect(controls.getSiteCreateBody()).toMatchObject({ facts: {
+    brand_tone: 'Friendly, Relaxing, Reliable',
+    locations: ['Houston', 'Katy', 'Sugar Land'],
+    services: ['Family dentistry', 'Teeth cleaning', 'Whitening'],
+    products: ['Night guards', 'Toothbrushes'],
+    authors: [{ name: 'Dr. Alex Morgan' }, { name: 'Dr. Jordan Lee' }],
+    confirmed_sources: ['https://northstar.example/about', 'Owner interview'],
+  } })
+})
+
+test('typed separators, Enter, plus and blur preserve individual items without submitting early', async ({ page }) => {
+  const controls = await installMocks(page)
+  await page.goto('/sites/new')
+  await fillRequiredSiteFacts(page)
+  const input = page.getByRole('textbox', { name: 'Services', exact: true })
+  await input.pressSequentially('Cleaning,')
+  await expect(page.getByRole('button', { name: 'Remove Cleaning', exact: true })).toBeVisible()
+  await input.fill('Whitening')
+  await input.press('Enter')
+  expect(controls.getSiteCreateRequests()).toBe(0)
+  await input.fill('Implants')
+  await page.getByRole('button', { name: 'Add services', exact: true }).click()
+  await input.fill('Crowns')
+  await input.press('Shift+Enter')
+  await input.pressSequentially('Bridges')
+  await page.getByRole('button', { name: 'Remove Whitening', exact: true }).click()
+  // Clicking Create site commits the remaining multiline draft before submission.
+  await page.getByRole('button', { name: 'Create site' }).click()
+  await expect(page).toHaveURL(/\/sites\/site-new\/overview$/)
+  expect(controls.getSiteCreateBody()).toMatchObject({ facts: { services: ['Cleaning', 'Implants', 'Crowns', 'Bridges'] } })
+})
+
+test('quoted values retain commas and pasted text replaces the current selection', async ({ page }) => {
+  const controls = await installMocks(page)
+  await page.goto('/sites/new')
+  await fillRequiredSiteFacts(page)
+  await pasteList(page, 'Locations', '"Houston, TX", "Austin, TX"\n"Houston, TX"')
+  const input = page.getByRole('textbox', { name: 'Locations', exact: true })
+  await input.pressSequentially('"Denver, CO"')
+  await input.press('Enter')
+  await expect(page.getByRole('button', { name: 'Remove Denver, CO', exact: true })).toBeVisible()
+  const services = page.getByRole('textbox', { name: 'Services', exact: true })
+  await services.fill('Old draft')
+  await services.selectText()
+  await pasteList(page, 'Services', 'Cleaning, Whitening')
+  await page.getByRole('button', { name: 'Create site' }).click()
+  await expect(page).toHaveURL(/\/sites\/site-new\/overview$/)
+  expect(controls.getSiteCreateBody()).toMatchObject({ facts: {
+    locations: ['Houston, TX', 'Austin, TX', 'Denver, CO'], services: ['Cleaning', 'Whitening'],
+  } })
+})
+
+for (const width of [1440, 390]) {
+  test(`populated chip fields remain accessible without horizontal overflow at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    await installMocks(page)
+    await page.goto('/sites/new')
+    await pasteList(page, 'Locations', 'Houston, Katy\nSugar Land')
+    await pasteList(page, 'Confirmed sources', `https://northstar.example/${'long-reference-'.repeat(18)}\nOwner interview`)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([])
+  })
+}

@@ -289,7 +289,9 @@ tbody tr:hover td { background: #fdfdfa; }
 .chip-input:focus-within { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(20,139,137,.11); }
 .chip { display: inline-flex; align-items: center; gap: 5px; background: var(--teal-light); color: var(--teal-dark); border-radius: 5px; padding: 4px 7px; font-size: .71rem; }
 .chip button { border: 0; background: transparent; color: currentColor; padding: 0; display: grid; place-items: center; }
-.chip-input input { min-width: 90px; flex: 1; border: 0; box-shadow: none !important; padding: 5px 3px; }
+.chip-input textarea { min-width: 90px; width: 90px; min-height: 30px; flex: 1; border: 0; box-shadow: none !important; padding: 5px 3px; }
+.chip-input .chip { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+.chip-input .chip button { flex-shrink: 0; }
 
 /* Pages / issues */
 .split-panel { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .8fr); gap: 20px; align-items: start; }

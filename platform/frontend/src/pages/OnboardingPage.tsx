@@ -1,34 +1,11 @@
-import { useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Check, Plus, X } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { Button, Field, Notice, Panel } from '../components/ui'
 import { TimezoneSelect } from '../components/TimezoneSelect'
+import { ChipInput } from '../components/ChipInput'
 import { useSites } from '../context/AppContext'
 import { connectionsApi, detailMessage, sitesApi } from '../lib/api'
-import { stringList } from './shared'
-
-function ChipField({ label, values, onChange, placeholder, hint }: { label: string; values: string[]; onChange: (values: string[]) => void; placeholder: string; hint?: string }) {
-  const [draft, setDraft] = useState('')
-  function add(value: string) {
-    const next = value.trim()
-    if (next && !values.includes(next)) onChange([...values, next])
-    setDraft('')
-  }
-  function keyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === 'Enter' || event.key === ',') {
-      event.preventDefault()
-      add(draft)
-    }
-    if (event.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1))
-  }
-  return <Field label={label} hint={hint}>
-    <div className="chip-input">
-      {values.map((value) => <span className="chip" key={value}>{value}<button type="button" aria-label={`Remove ${value}`} onClick={() => onChange(values.filter((item) => item !== value))}><X size={12} /></button></span>)}
-      <input aria-label={label} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={keyDown} onBlur={() => add(draft)} placeholder={values.length ? 'Add another' : placeholder} />
-      <button type="button" className="icon-button" aria-label={`Add ${label.toLowerCase()}`} onClick={() => add(draft)}><Plus size={14} /></button>
-    </div>
-  </Field>
-}
 
 export function OnboardingPage() {
   const navigate = useNavigate()
@@ -40,7 +17,7 @@ export function OnboardingPage() {
     language: 'en',
     business_name: '',
     audience: '',
-    brand_tone: '',
+    brand_tone: [] as string[],
     locations: [] as string[],
     services: [] as string[],
     products: [] as string[],
@@ -72,7 +49,7 @@ export function OnboardingPage() {
           business_name: form.business_name.trim(), audience: form.audience.trim(), locations: form.locations,
           services: form.services, products: form.products,
           authors: form.authors.map((name) => ({ name })), confirmed_sources: form.confirmed_sources,
-          language: form.language, brand_tone: form.brand_tone.trim(),
+          language: form.language, brand_tone: form.brand_tone.join(', '),
         },
       })
       createdId = site.id
@@ -117,13 +94,13 @@ export function OnboardingPage() {
               <div className="form-grid">
                 <Field label="Business name" required><input value={form.business_name} onChange={(event) => update('business_name', event.target.value)} required placeholder="Northstar Dental" /></Field>
                 <Field label="Primary audience" required><input value={form.audience} onChange={(event) => update('audience', event.target.value)} required placeholder="Families in Austin" /></Field>
-                <Field label="Brand tone" hint="Optional, for editorial review"><input value={form.brand_tone} onChange={(event) => update('brand_tone', event.target.value)} placeholder="Clear, reassuring, expert" /></Field>
+                <ChipInput label="Brand tone" values={form.brand_tone} onChange={(value) => update('brand_tone', value)} placeholder="Clear, reassuring, expert" hint="Optional, for editorial review." />
                 <div />
-                <ChipField label="Locations" values={form.locations} onChange={(value) => update('locations', value)} placeholder="Austin, TX" hint="Press Enter after each location." />
-                <ChipField label="Services" values={form.services} onChange={(value) => update('services', value)} placeholder="Family dentistry" />
-                <ChipField label="Products" values={form.products} onChange={(value) => update('products', value)} placeholder="Night guards" />
-                <ChipField label="Authors" values={form.authors} onChange={(value) => update('authors', value)} placeholder="Dr. Alex Morgan" />
-                <ChipField label="Confirmed sources" values={form.confirmed_sources} onChange={(value) => update('confirmed_sources', value)} placeholder="https://example.com/about" hint="URLs or internal source labels you trust." />
+                <ChipInput label="Locations" values={form.locations} onChange={(value) => update('locations', value)} placeholder="Houston" />
+                <ChipInput label="Services" values={form.services} onChange={(value) => update('services', value)} placeholder="Family dentistry" />
+                <ChipInput label="Products" values={form.products} onChange={(value) => update('products', value)} placeholder="Night guards" />
+                <ChipInput label="Authors" values={form.authors} onChange={(value) => update('authors', value)} placeholder="Dr. Alex Morgan" />
+                <ChipInput label="Confirmed sources" values={form.confirmed_sources} onChange={(value) => update('confirmed_sources', value)} placeholder="https://example.com/about" hint="URLs or internal source labels you trust." />
               </div>
               <div className="divider" />
               <div className="panel-header"><div><h2 className="panel-title">WordPress connection <span className="text-small text-muted">Optional</span></h2><p className="panel-subtitle">Save the connection now so ForgeSEO can verify authenticated inventory after setup. Leave both fields blank to connect later from Settings.</p></div></div>

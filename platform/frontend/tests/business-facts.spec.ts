@@ -78,7 +78,7 @@ test('owner can edit grounded business facts and verify the returned saved site'
   await page.getByLabel('Primary audience').fill('Independent product teams')
   await page.getByLabel('Language').fill('en-US')
   await page.getByRole('combobox', { name: 'Timezone' }).selectOption('America/Denver')
-  await page.getByRole('textbox', { name: 'Locations', exact: true }).fill('Denver, CO')
+  await page.getByRole('textbox', { name: 'Locations', exact: true }).fill('"Denver, CO"')
   await page.getByRole('textbox', { name: 'Locations', exact: true }).press('Enter')
   await page.getByRole('textbox', { name: 'Products', exact: true }).fill('Research kits')
   await page.getByRole('textbox', { name: 'Products', exact: true }).press('Enter')
@@ -115,6 +115,8 @@ test('viewer sees missing facts and read-only controls, while policy guardrails 
   await expect(page.getByText('Only the site owner can change business facts.')).toBeVisible()
   await expect(page.getByLabel('Business name')).toBeDisabled()
   await expect(page.getByRole('combobox', { name: 'Timezone' })).toBeDisabled()
+  await expect(page.getByRole('textbox', { name: 'Services', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Add services', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Owner access required' })).toBeDisabled()
 
   await page.goto('/sites/site-1/settings/policies')
@@ -142,4 +144,26 @@ test('timezone dropdown preserves a saved timezone alias without silently replac
   await page.getByRole('button', { name: 'Save business facts' }).click()
   await expect(page.getByText('Business facts saved. The API returned the updated site state.')).toBeVisible()
   expect(controls.patches).toEqual([expect.objectContaining({ timezone: 'US/Central' })])
+})
+
+test('business facts batch additions preserve existing comma-containing values and unrelated facts', async ({ page }) => {
+  const controls = await installBusinessMocks(page)
+  await page.goto('/sites/site-1/settings/business')
+  const locations = page.getByRole('textbox', { name: 'Locations', exact: true })
+  await locations.fill('Houston, Katy\nHouston, ')
+  await page.getByRole('button', { name: 'Add locations', exact: true }).click()
+  const services = page.getByRole('textbox', { name: 'Services', exact: true })
+  await services.fill('Research, Prototyping\r\nDesign systems')
+  await services.press('Enter')
+  await page.getByRole('textbox', { name: 'Products', exact: true }).fill('Guides\nTemplates')
+  await page.getByRole('button', { name: 'Save business facts' }).click()
+  await expect(page.getByText('Business facts saved. The API returned the updated site state.')).toBeVisible()
+  expect(controls.patches).toHaveLength(1)
+  expect(controls.patches[0]).toMatchObject({ facts: {
+    locations: ['Austin, TX', 'Houston', 'Katy'],
+    services: ['Design systems', 'Research', 'Prototyping'],
+    products: ['Guides', 'Templates'],
+    brand_tone: 'Clear and practical',
+    authors: [{ name: 'Alex Owner', id: 'author-1' }],
+  } })
 })
