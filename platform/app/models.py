@@ -109,6 +109,7 @@ class Site(Base):
     language: Mapped[str] = mapped_column(String(16), nullable=False, default="en")
     facts: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=_dict)
     paused: Mapped[bool] = mapped_column(nullable=False, default=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
 

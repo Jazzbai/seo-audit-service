@@ -126,6 +126,12 @@ def run_job(job_id):
                 db.commit()
                 return job.result
             pause_reason = _pause_reason(db, site, job)
+            if site.archived_at is not None:
+                job.status, job.result = 'cancelled', {
+                    **(job.result if isinstance(job.result, dict) else {}), 'reason': 'site_archived'}
+                job.lease_until, job.updated_at = None, now()
+                db.commit()
+                return job.result
             if pause_reason:
                 job.status = 'queued'
                 job.attempts = max(0, (job.attempts or 0) - 1)

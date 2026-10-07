@@ -16,6 +16,7 @@ import {
   LogOut,
   Menu,
   PanelLeftClose,
+  Plus,
   PlugZap,
   Settings2,
   ShoppingBag,
@@ -35,6 +36,7 @@ interface NavItem {
 }
 
 function navItems(siteId: string): Array<{ label?: string; items: NavItem[] }> {
+  if (!siteId) return []
   const base = `/sites/${siteId}`
   return [
     { items: [{ label: 'Overview', path: `${base}/overview`, icon: LayoutDashboard, end: true }] },
@@ -67,6 +69,7 @@ function navItems(siteId: string): Array<{ label?: string; items: NavItem[] }> {
 
 function SiteSwitcher({ siteId, closeMenu }: { siteId: string; closeMenu: () => void }) {
   const navigate = useNavigate()
+  const { role } = useAuth()
   const { sites, status } = useSites()
   const site = sites.find((item) => item.id === siteId)
   return (
@@ -81,6 +84,10 @@ function SiteSwitcher({ siteId, closeMenu }: { siteId: string; closeMenu: () => 
         </label>
       ) : <div className="site-switcher-empty">No sites yet</div>}
       {site && <div className="site-switcher-empty" title={site.origin}>{site.origin.replace(/^https?:\/\//, '')}</div>}
+      <div className="site-switcher-actions">
+        {role === 'owner' && <Link to="/sites/new" onClick={closeMenu}><Plus size={14} />Add site</Link>}
+        <NavLink to="/sites" end onClick={closeMenu}><Globe2 size={14} />Manage sites</NavLink>
+      </div>
     </div>
   )
 }
@@ -93,7 +100,7 @@ function Sidebar({ siteId, open, closeMenu }: { siteId: string; open: boolean; c
     <>
       {open && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={closeMenu} />}
       <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="Primary navigation">
-        <Link to={`/sites/${siteId}/overview`} className="brand" onClick={closeMenu}><span className="brand-mark">✦</span><span>FORGESEO</span></Link>
+        <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="brand" onClick={closeMenu}><span className="brand-mark">✦</span><span>FORGESEO</span></Link>
         <SiteSwitcher siteId={siteId} closeMenu={closeMenu} />
         <nav className="sidebar-nav" aria-label="Primary navigation">
           {sections.map((section, index) => <div key={section.label ?? index}>
@@ -118,12 +125,13 @@ function Sidebar({ siteId, open, closeMenu }: { siteId: string; open: boolean; c
 }
 
 export function AppShell() {
-  const { siteId = '' } = useParams()
+  const { siteId: selectedSiteId } = useParams()
   const { sites } = useSites()
+  const siteId = selectedSiteId ?? sites[0]?.id ?? ''
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
   const site = sites.find((item) => item.id === siteId)
-  const current = titleCase(location.pathname.split('/').filter(Boolean).slice(-1)[0] ?? 'overview')
+  const current = location.pathname === '/sites' ? 'Manage sites' : titleCase(location.pathname.split('/').filter(Boolean).slice(-1)[0] ?? 'overview')
 
   useEffect(() => setMenuOpen(false), [location.pathname])
 
@@ -133,8 +141,8 @@ export function AppShell() {
       <div className="main-shell">
         <header className="mobile-topbar">
           <button className="icon-button" type="button" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={20} /></button>
-          <Link to={`/sites/${siteId}/overview`} className="mobile-brand"><span className="brand-mark">✦</span>FORGESEO</Link>
-          <Link className="icon-button" to={`/sites/${siteId}/settings/connections`} aria-label="Open settings"><Settings2 size={18} /></Link>
+          <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="mobile-brand"><span className="brand-mark">✦</span>FORGESEO</Link>
+          <Link className="icon-button" to={siteId ? `/sites/${siteId}/settings/connections` : '/sites'} aria-label={siteId ? 'Open settings' : 'Manage sites'}><Settings2 size={18} /></Link>
         </header>
         <main id="main-content" className="content-wrap wide">
           <div className="breadcrumb"><span>{site?.name ?? 'Workspace'}</span><ChevronDown size={12} /><strong>{current}</strong></div>

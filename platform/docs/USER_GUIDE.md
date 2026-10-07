@@ -9,7 +9,9 @@ no PowerShell, API keys in requests, or environment-file editing is required.
 1. Sign in to [your deployed ForgeSEO application](https://forgeseo.139.138.153.13.sslip.io)
    using your existing workspace. You can start reviewing now; you do not have to
    enable automation or edit environment files.
-2. Choose the correct site from the site selector.
+2. Choose the correct site from the site selector. To connect another website,
+   use **Add site** directly below it. **Manage sites** lists your active and
+   archived websites, with search and an **Open dashboard** link for each.
 3. Use **Overview** for monitoring freshness and coverage. A completed audit can
    still have errors. An empty queue does not mean the whole site is optimized.
 4. Open **Issues** and **Pages** to review the evidence behind proposed work.
@@ -28,6 +30,26 @@ As of the 2026-09-24 preparation checkpoint, the existing article's three source
 reviews are recorded; its remaining editorial blocker is the genuine WordPress
 author. Independent recovery-key access and notification delivery still need
 verification. Do not invent an author or enable live publication to clear a queue.
+
+## Adding, switching, and archiving websites
+
+An owner can click **Add site** below the sidebar's site selector (on a phone,
+open the navigation menu first). Enter the website address and business facts,
+then connect WordPress using that site's username and application password.
+Each website has separate connections, policies, content, and reports. New
+websites start with automation paused; adding one does not authorize publishing.
+Use the selector to switch dashboards, or **Manage sites** to search all sites.
+
+To stop managing a website, open **Manage sites**, choose **Archive site**, and
+read the confirmation before continuing. Archiving stops scheduled monitoring,
+cancels queued work, and hides the site from the active selector. It does not
+delete your actual website, credentials, articles, evidence, or history. A site
+with a running job cannot be archived until that job has finished.
+
+Choose **Archived sites** and **Restore site** to bring it back. Restored sites
+remain automation-paused; cancelled work is not restarted. Review connections
+and policy controls before permitting new writes. Only owners can add, archive,
+or restore websites; other team members can open and switch their dashboards.
 
 ## Reviewing a flagged source
 

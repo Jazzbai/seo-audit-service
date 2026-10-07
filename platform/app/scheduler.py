@@ -533,7 +533,7 @@ def schedule():
             _recover_interrupted_publication(db, site, job, instant)
             _recover_full_cycle_stages(db, site, job, instant)
         db.commit()
-        for site in db.scalars(select(Site)):
+        for site in db.scalars(select(Site).where(Site.archived_at.is_(None))):
             connections = {c.kind:c for c in db.scalars(select(Connection).where(Connection.site_id == site.id,Connection.status != 'revoked'))}
             work = [('availability',60,{})]
             policy = current_policy(db,site.id)
@@ -670,7 +670,9 @@ def schedule():
         # Keep dispatch bounded, but calculate health from the complete durable
         # queue.  Otherwise the 201st overdue job could be invisible in the
         # heartbeat and fail to open the queue incident.
-        due_filters = (Job.status.in_(['queued', 'retry']), Job.available_at <= instant)
+        active_site_ids = select(Site.id).where(Site.archived_at.is_(None))
+        due_filters = (Job.status.in_(['queued', 'retry']), Job.available_at <= instant,
+                       Job.site_id.in_(active_site_ids))
         paused_site_ids = set(db.scalars(select(Site.id).where(Site.paused.is_(True))).all())
         global_pause = global_controls(db)['global_pause']
         # Held write jobs remain part of the durable backlog and its health

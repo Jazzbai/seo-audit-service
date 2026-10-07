@@ -193,7 +193,10 @@ class CostSettlement(Input):
 
 def guard(db, ctx, site_id, write=False, owner=False):
     require_role(ctx, *(('owner',) if owner else ('owner', 'editor') if write else ('owner', 'editor', 'viewer')))
-    return require_site(db, ctx, site_id)
+    site = require_site(db, ctx, site_id)
+    if (write or owner) and site.archived_at is not None:
+        raise HTTPException(409, "Restore this site in Manage sites before making changes.")
+    return site
 
 
 def own(db, cls, row_id, site_id):
@@ -443,8 +446,49 @@ def utc(value):
 
 
 @router.get("/sites")
-def sites(ctx=Depends(require_user), db=Depends(get_db), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
-    return paginated(db, Site, [Site.team_id == ctx['team_id']], limit, offset)
+def sites(ctx=Depends(require_user), db=Depends(get_db), limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), include_archived: bool = False):
+    filters = [Site.team_id == ctx['team_id']]
+    if not include_archived:
+        filters.append(Site.archived_at.is_(None))
+    return paginated(db, Site, filters, limit, offset)
+
+
+def _set_site_archived(db, ctx, site_id, archived):
+    require_role(ctx, 'owner')
+    site = require_site(db, ctx, site_id)
+    from app.worker import exclusive
+
+    # Workers hold this lock through remote operations and workflow commits.
+    with exclusive('site:' + site.id) as acquired:
+        if not acquired:
+            raise HTTPException(409, "This site has work in progress. Try again when its job finishes.")
+        db.refresh(site)
+        if archived and db.scalar(select(Job.id).where(Job.site_id == site.id, Job.status == 'running')):
+            raise HTTPException(409, "This site has work in progress. Try again when its job finishes.")
+        if bool(site.archived_at) == archived:
+            return record(site)
+        site.archived_at = now() if archived else None
+        site.paused = True
+        if archived:
+            for job in db.scalars(select(Job).where(Job.site_id == site.id, Job.status.in_(['queued', 'retry']))):
+                job.status, job.lease_until, job.updated_at = 'cancelled', None, now()
+                job.result = {**(job.result if isinstance(job.result, dict) else {}),
+                              'archive': {'reason': 'site_archived'}}
+        event(db, site, 'site_archived' if archived else 'site_restored',
+              'Site archived; scheduled work stopped and history retained' if archived else
+              'Site restored; automation remains paused')
+        db.commit()
+        return record(site)
+
+
+@router.post('/sites/{site_id}/archive')
+def archive_site(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    return _set_site_archived(db, ctx, site_id, True)
+
+
+@router.post('/sites/{site_id}/restore')
+def restore_site(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    return _set_site_archived(db, ctx, site_id, False)
 
 
 @router.post("/sites", status_code=201)
@@ -462,7 +506,7 @@ def add_site(payload: SiteInput, ctx=Depends(require_user), db=Depends(get_db)):
         raise HTTPException(422, "Enter the site origin, not an individual page")
     origin = f'https://{url.netloc.lower()}'
     if db.scalar(select(Site).where(Site.team_id == ctx['team_id'], Site.origin == origin)):
-        raise HTTPException(409, "This site is already registered")
+        raise HTTPException(409, "This site is already registered. Open Manage sites to find or restore it.")
     site = Site(team_id=ctx['team_id'], name=payload.name, origin=origin,
                 timezone=payload.timezone, language=payload.language, facts=payload.facts, paused=True)
     db.add(site)

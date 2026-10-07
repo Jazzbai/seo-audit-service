@@ -164,12 +164,25 @@ export const authApi = {
 }
 
 export const sitesApi = {
-  list: () => list<Site>('/sites'),
+  list: async (includeArchived = false): Promise<ListResponse<Site>> => {
+    const items: Site[] = []
+    let total = 0
+    do {
+      const batch = await list<Site>('/sites', { limit: 200, offset: items.length,
+        include_archived: includeArchived ? 'true' : undefined })
+      total = batch.total
+      if (!batch.items.length && items.length < total) throw new Error('The site list is incomplete. Please refresh.')
+      items.push(...batch.items)
+    } while (items.length < total)
+    return { items, total }
+  },
   create: (body: { name: string; origin: string; timezone: string; language: string; facts: Record<string, unknown> }) =>
     request<Site>('/sites', { method: 'POST', body }),
   get: (siteId: string) => request<Site>(`/sites/${encode(siteId)}`),
   update: (siteId: string, body: Record<string, unknown>) => request<Site>(`/sites/${encode(siteId)}`, { method: 'PATCH', body }),
   overview: (siteId: string) => request<Overview>(`/sites/${encode(siteId)}/overview`),
+  archive: (siteId: string) => request<Site>(`/sites/${encode(siteId)}/archive`, { method: 'POST' }),
+  restore: (siteId: string) => request<Site>(`/sites/${encode(siteId)}/restore`, { method: 'POST' }),
 }
 
 export const connectionsApi = {

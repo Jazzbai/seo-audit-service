@@ -98,6 +98,7 @@ export function OnboardingPage() {
     <div className="onboarding-wrap">
       <header className="onboarding-header"><div className="brand" style={{ padding: 0, color: 'var(--navy)' }}><span className="brand-mark">✦</span><span>FORGESEO</span></div><span className="text-small text-muted">Step 1 of 1 · Site setup</span></header>
       <main className="onboarding-content">
+        <Link className="button button-secondary button-sm" to="/sites">Back to Manage sites</Link>
         <div className="onboarding-intro"><p className="eyebrow">Bring a site into focus</p><h1>Tell ForgeSEO what good work looks like.</h1><p>These facts stay close to every audit and editorial check. Start with what you know; you can refine it in Policies later.</p></div>
         {error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}
         <div className="onboarding-grid">
@@ -131,7 +132,7 @@ export function OnboardingPage() {
               </div>
               <Notice kind="info" title="No live content changes">Saving this connection only stores access for later capability checks. It does not publish, edit, or delete WordPress content.</Notice>
               {createdSiteId && <Notice kind="warning" title="Site created; finish connection setup">The site exists, but its WordPress connection needs attention. Open Settings to retry without creating another site. <Link to={`/sites/${createdSiteId}/settings/connections`}>Open connection settings</Link></Notice>}
-              <div className="form-actions"><Button variant="secondary" type="button" onClick={() => navigate('/')} disabled={submitting}>Cancel</Button><Button size="lg" type="submit" disabled={submitting || Boolean(createdSiteId)}>{submitting ? 'Creating site…' : createdSiteId ? 'Site created' : 'Create site'}<Check size={16} /></Button></div>
+              <div className="form-actions"><Button variant="secondary" type="button" onClick={() => navigate('/sites')} disabled={submitting}>Cancel</Button><Button size="lg" type="submit" disabled={submitting || Boolean(createdSiteId)}>{submitting ? 'Creating site…' : createdSiteId ? 'Site created' : 'Create site'}<Check size={16} /></Button></div>
             </form>
           </Panel>
           <aside className="policy-preview">

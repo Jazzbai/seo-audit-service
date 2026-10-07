@@ -5,6 +5,7 @@ import { useAuth, useSites } from './context/AppContext'
 import { AppShell } from './components/AppShell'
 import { LoginPage, BootstrapPage } from './pages/AuthPages'
 import { OnboardingPage } from './pages/OnboardingPage'
+import { ManageSitesPage } from './pages/ManageSitesPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { IssuesPage, PagesPage } from './pages/SeoPages'
 import { ArticleEditorPage, ArticlesPage, ContentCalendarPage } from './pages/ContentPages'
@@ -36,9 +37,10 @@ function AuthenticatedRoute() {
 }
 
 function OnboardingRoute() {
-  const { status } = useAuth()
+  const { status, role } = useAuth()
   if (status === 'loading') return <FullPageLoading />
   if (status !== 'authenticated') return <Navigate to="/login" replace />
+  if (role !== 'owner') return <Navigate to="/sites" replace />
   return <OnboardingPage />
 }
 
@@ -50,7 +52,7 @@ function SiteRoute() {
   const siteId = pathname.split('/')[2]
 
   useEffect(() => {
-    if (status === 'ready' && sites.length === 0 && !pathname.endsWith('/new')) navigate('/sites/new', { replace: true })
+    if (status === 'ready' && sites.length === 0) navigate('/sites', { replace: true })
     if (status === 'ready' && sites.length > 0 && siteId && !sites.some((site) => site.id === siteId)) navigate(`/sites/${sites[0].id}/overview`, { replace: true })
   }, [navigate, pathname, siteId, sites, status])
 
@@ -67,7 +69,7 @@ function RootRedirect() {
   if (authStatus === 'uninitialized') return <Navigate to="/bootstrap" replace />
   if (authStatus !== 'authenticated') return <Navigate to="/login" replace />
   if (status === 'loading' || status === 'idle') return <FullPageLoading />
-  if (!sites.length) return <Navigate to="/sites/new" replace />
+  if (!sites.length) return <Navigate to="/sites" replace />
   return <Navigate to={`/sites/${sites[0].id}/overview`} replace />
 }
 
@@ -80,6 +82,9 @@ export default function App() {
       </Route>
       <Route element={<AuthenticatedRoute />}>
         <Route path="/sites/new" element={<OnboardingRoute />} />
+        <Route path="/sites" element={<AppShell />}>
+          <Route index element={<ManageSitesPage />} />
+        </Route>
         <Route path="/sites/:siteId" element={<SiteRoute />}>
           <Route index element={<Navigate to="overview" replace />} />
           <Route path="overview" element={<OverviewPage />} />

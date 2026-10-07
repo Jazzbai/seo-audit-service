@@ -72,7 +72,7 @@ DEFAULT_USER = "forge_live_test"
 DEFAULT_DATABASE = "forge_live_fixture"
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 DATABASE_NAME_PATTERN = re.compile(r"^forge_live_[0-9a-f]{32}$")
-EXPECTED_ALEMBIC_HEAD = "0002_session_team_scope"
+EXPECTED_ALEMBIC_HEAD = "0003_site_archive"
 
 
 class PostgresFixture:

@@ -48,6 +48,8 @@ async function installMocks(page: Page, options: {
   graphConnection?: Record<string, unknown> | null
   notificationOutcome?: 'accepted' | 'failed' | 'blocked' | 'outcome_unknown'
 } = {}) {
+  // Keep the seven-day scope-review fixtures independent of the calendar date.
+  await page.clock.setFixedTime(new Date('2026-09-25T12:00:00Z'))
   const role = options.role ?? 'owner'
   let graphConnection = options.graphConnection ?? null
   let graphSave: Record<string, unknown> | null = null
@@ -277,7 +279,7 @@ test('site changes load a new author response and keep the old policy selection 
   await expect(page.getByLabel('Publishing author').locator('option[value="author-a"]')).toHaveText('Site A Author (author-a)')
   await page.getByLabel('Choose a site').selectOption('site-b')
   await expect(page).toHaveURL(/\/sites\/site-b\/overview$/)
-  await page.getByRole('link', { name: 'Policies & budget' }).click()
+  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: 'Policies & budget' }).click()
   await expect(page).toHaveURL(/\/sites\/site-b\/settings\/policies$/)
   const selector = page.getByLabel('Publishing author')
   await expect(selector.locator('option[value="author-b"]')).toHaveText('Site B Author (author-b)')

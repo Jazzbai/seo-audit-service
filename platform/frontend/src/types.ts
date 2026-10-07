@@ -49,6 +49,7 @@ export interface Site {
   language: string
   facts: BusinessFacts
   paused: boolean
+  archived_at?: string | null
   created_at?: string
 }
 

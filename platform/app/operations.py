@@ -197,7 +197,7 @@ def sync_monitoring_incidents(db, *, scheduler_healthy: bool,
     """
     sites = [db.get(Site, site_id)] if site_id is not None else db.scalars(select(Site)).all()
     for site in sites:
-        if site is None:
+        if site is None or site.archived_at is not None:
             continue
         sync_health_incident(
             db,
@@ -347,6 +347,8 @@ def _pause_sensitive_job(kind: str, payload: dict | None = None) -> bool:
 
 def enqueue(db, site, kind: str, payload: dict | None = None,
             idempotency_key: str | None = None) -> Job:
+    if site.archived_at is not None:
+        raise ValueError('Restore this site before queuing work')
     allowed = {"audit", "inventory", "poll_changes", "plan", "generate", "publish", "availability",
                "visibility", "refresh", "connection_test", "candidate", "rollback", "full_cycle",
                "content_autopilot", "reconcile_publication", "browser", "digest", "targeted_audit", "notification_test"}
@@ -848,6 +850,13 @@ def _queue_metric_validation(details: Any) -> tuple[bool, list[str]]:
 def monitoring_status(db, site_id: str | None = None) -> dict[str, Any]:
     """Return global health plus truthful site-scoped cadence evidence."""
 
+    if site_id is not None:
+        site = db.get(Site, site_id)
+        if site is not None and site.archived_at is not None:
+            return {'status': 'archived', 'last_seen_at': None,
+                    'queue_delay_seconds': None, 'missed_checks': None,
+                    'message': 'Monitoring stopped because this site is archived',
+                    'cadence': {}}
     instant = now()
     row = db.get(Heartbeat, "scheduler")
     if row is None:
