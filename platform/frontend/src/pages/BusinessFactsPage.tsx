@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Plus, Save, ShieldCheck, Users, X } from 'lucide-react'
 import { Badge, Button, EmptyState, ErrorState, Field, Notice, PageHeader, Panel } from '../components/ui'
+import { TimezoneSelect } from '../components/TimezoneSelect'
 import { detailMessage, sitesApi } from '../lib/api'
 import { useAuth } from '../context/AppContext'
 import type { BusinessFacts, Site } from '../types'
@@ -275,7 +276,7 @@ export function BusinessFactsPage() {
                 <Field label="Business name"><input value={form.business_name} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, business_name: event.target.value }))} placeholder="Only enter the verified business name" /></Field>
                 <Field label="Primary audience"><input value={form.audience} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, audience: event.target.value }))} placeholder="Only enter the audience you serve" /></Field>
                 <Field label="Language" hint="Use the site's primary language code or label."><input value={form.language} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, language: event.target.value }))} placeholder="e.g. en" /></Field>
-                <Field label="Timezone" hint="Use an IANA timezone such as America/Chicago."><input value={form.timezone} disabled={!canEdit} onChange={(event) => setForm((current) => ({ ...current, timezone: event.target.value }))} placeholder="e.g. America/Chicago" /></Field>
+                <Field label="Timezone" hint="Choose the business's local timezone."><TimezoneSelect value={form.timezone} disabled={!canEdit} onChange={(timezone) => setForm((current) => ({ ...current, timezone }))} /></Field>
                 <ChipEditor label="Locations" values={form.locations} onChange={(locations) => setForm((current) => ({ ...current, locations }))} placeholder="Add a verified location" hint="Press Enter after each location." disabled={!canEdit} />
                 <ChipEditor label="Services" values={form.services} onChange={(services) => setForm((current) => ({ ...current, services }))} placeholder="Add a verified service" hint="Press Enter after each service." disabled={!canEdit} />
                 <ChipEditor label="Products" values={form.products} onChange={(products) => setForm((current) => ({ ...current, products }))} placeholder="Add a verified product" hint="Press Enter after each product." disabled={!canEdit} />

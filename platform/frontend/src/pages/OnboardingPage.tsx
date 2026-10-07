@@ -2,6 +2,7 @@ import { useState, type FormEvent, type KeyboardEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Check, Plus, X } from 'lucide-react'
 import { Button, Field, Notice, Panel } from '../components/ui'
+import { TimezoneSelect } from '../components/TimezoneSelect'
 import { useSites } from '../context/AppContext'
 import { connectionsApi, detailMessage, sitesApi } from '../lib/api'
 import { stringList } from './shared'
@@ -97,7 +98,7 @@ export function OnboardingPage() {
   return (
     <div className="onboarding-wrap">
       <header className="onboarding-header"><div className="brand" style={{ padding: 0, color: 'var(--navy)' }}><span className="brand-mark">✦</span><span>FORGESEO</span></div><span className="text-small text-muted">Step 1 of 1 · Site setup</span></header>
-      <main className="onboarding-content">
+      <main id="main-content" tabIndex={-1} className="onboarding-content">
         <Link className="button button-secondary button-sm" to="/sites">Back to Manage sites</Link>
         <div className="onboarding-intro"><p className="eyebrow">Bring a site into focus</p><h1>Tell ForgeSEO what good work looks like.</h1><p>These facts stay close to every audit and editorial check. Start with what you know; you can refine it in Policies later.</p></div>
         {error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}
@@ -108,7 +109,7 @@ export function OnboardingPage() {
               <div className="form-grid">
                 <Field label="Site name" required><input value={form.name} onChange={(event) => update('name', event.target.value)} required placeholder="Northstar Dental" /></Field>
                 <Field label="Site origin" hint="Include https://" required><input type="url" value={form.origin} onChange={(event) => update('origin', event.target.value)} required placeholder="https://northstardental.com" /></Field>
-                <Field label="Timezone" required><input value={form.timezone} onChange={(event) => update('timezone', event.target.value)} required placeholder="America/Chicago" /></Field>
+                <Field label="Timezone" hint="Choose the business's local timezone." required><TimezoneSelect value={form.timezone} onChange={(value) => update('timezone', value)} required /></Field>
                 <Field label="Language" required><select value={form.language} onChange={(event) => update('language', event.target.value)}><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option></select></Field>
               </div>
               <div className="divider" />

@@ -77,7 +77,7 @@ test('owner can edit grounded business facts and verify the returned saved site'
   await page.getByLabel('Business name').fill('Acme Studio LLC')
   await page.getByLabel('Primary audience').fill('Independent product teams')
   await page.getByLabel('Language').fill('en-US')
-  await page.getByLabel('Timezone').fill('America/Denver')
+  await page.getByRole('combobox', { name: 'Timezone' }).selectOption('America/Denver')
   await page.getByRole('textbox', { name: 'Locations', exact: true }).fill('Denver, CO')
   await page.getByRole('textbox', { name: 'Locations', exact: true }).press('Enter')
   await page.getByRole('textbox', { name: 'Products', exact: true }).fill('Research kits')
@@ -114,6 +114,7 @@ test('viewer sees missing facts and read-only controls, while policy guardrails 
   await expect(page.getByText('No provided facts are stored yet')).toBeVisible()
   await expect(page.getByText('Only the site owner can change business facts.')).toBeVisible()
   await expect(page.getByLabel('Business name')).toBeDisabled()
+  await expect(page.getByRole('combobox', { name: 'Timezone' })).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Owner access required' })).toBeDisabled()
 
   await page.goto('/sites/site-1/settings/policies')
@@ -130,4 +131,15 @@ test('business facts recovers from a site read error with the real retry path', 
   await page.getByRole('button', { name: 'Try again' }).click()
   await expect(page.getByRole('heading', { name: 'Business facts' })).toBeVisible()
   await expect(page.locator('main').getByText('Acme Studio', { exact: true }).first()).toBeVisible()
+})
+
+test('timezone dropdown preserves a saved timezone alias without silently replacing it', async ({ page }) => {
+  const controls = await installBusinessMocks(page, { site: { ...structuredClone(defaultSite), timezone: 'US/Central' } })
+  await page.goto('/sites/site-1/settings/business')
+  const timezone = page.getByRole('combobox', { name: 'Timezone' })
+  await expect(timezone).toHaveValue('US/Central')
+  await expect(timezone.locator('option[value="US/Central"]')).toBeAttached()
+  await page.getByRole('button', { name: 'Save business facts' }).click()
+  await expect(page.getByText('Business facts saved. The API returned the updated site state.')).toBeVisible()
+  expect(controls.patches).toEqual([expect.objectContaining({ timezone: 'US/Central' })])
 })

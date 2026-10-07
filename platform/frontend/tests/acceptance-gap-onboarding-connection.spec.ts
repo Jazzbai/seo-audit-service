@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import AxeBuilder from '@axe-core/playwright'
+
+test.use({ timezoneId: 'America/Chicago' })
 
 const auth = {
   user: { id: 'user-1', email: 'owner@example.com', name: 'Owner' },
@@ -35,6 +38,7 @@ async function json(route: Route, body: unknown, status = 200) {
 async function installMocks(page: Page, options: { failConnection?: boolean } = {}) {
   let siteCreated = false
   let siteCreateRequests = 0
+  let siteCreateBody: Record<string, unknown> | null = null
   let connectionSave: Record<string, unknown> | null = null
 
   await page.route('**/api/v1/**', async (route) => {
@@ -45,6 +49,7 @@ async function installMocks(page: Page, options: { failConnection?: boolean } = 
     if (path === '/sites' && request.method() === 'GET') return json(route, siteCreated ? { items: [site], total: 1 } : { items: [], total: 0 })
     if (path === '/sites' && request.method() === 'POST') {
       siteCreateRequests += 1
+      siteCreateBody = request.postDataJSON() as Record<string, unknown>
       siteCreated = true
       return json(route, site)
     }
@@ -57,7 +62,7 @@ async function installMocks(page: Page, options: { failConnection?: boolean } = 
     return json(route, { items: [], total: 0 })
   })
 
-  return { getSiteCreateRequests: () => siteCreateRequests, getConnectionSave: () => connectionSave }
+  return { getSiteCreateRequests: () => siteCreateRequests, getSiteCreateBody: () => siteCreateBody, getConnectionSave: () => connectionSave }
 }
 
 async function fillRequiredSiteFacts(page: Page) {
@@ -109,4 +114,36 @@ test('onboarding keeps a created site recoverable when saving its connection fai
   await expect(page.getByRole('link', { name: 'Open connection settings' })).toHaveAttribute('href', '/sites/site-new/settings/connections')
   await expect(page.getByRole('button', { name: 'Site created' })).toBeDisabled()
   expect(controls.getSiteCreateRequests()).toBe(1)
+})
+
+for (const width of [1440, 390]) {
+  test(`timezone dropdown offers worldwide choices and submits the selected identifier at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 })
+    const controls = await installMocks(page)
+    await page.goto('/sites/new')
+    const timezone = page.getByRole('combobox', { name: 'Timezone' })
+    await expect(timezone).toHaveValue('America/Chicago')
+    await expect(timezone.locator('option[value="America/Chicago"]')).toContainText('Central Time')
+    expect(await timezone.locator('option').count()).toBeGreaterThan(400)
+    for (const id of ['Europe/London', 'Asia/Tokyo', 'UTC']) {
+      await timezone.selectOption(id)
+      await expect(timezone).toHaveValue(id)
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([])
+    await fillRequiredSiteFacts(page)
+    await page.getByRole('button', { name: 'Create site' }).click()
+    await expect(page).toHaveURL(/\/sites\/site-new\/overview$/)
+    expect(controls.getSiteCreateBody()).toMatchObject({ timezone: 'UTC' })
+  })
+}
+
+test('timezone dropdown retains worldwide choices without the Intl enumeration API', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(Intl, 'supportedValuesOf', { value: undefined, configurable: true }))
+  await installMocks(page)
+  await page.goto('/sites/new')
+  const timezone = page.getByRole('combobox', { name: 'Timezone' })
+  expect(await timezone.locator('option').count()).toBeGreaterThan(400)
+  await timezone.selectOption('Australia/Sydney')
+  await expect(timezone).toHaveValue('Australia/Sydney')
 })
