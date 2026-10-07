@@ -1,6 +1,9 @@
 """Archiving preserves history, isolates teams, and stops all scheduled work."""
 from contextlib import contextmanager
 from datetime import timedelta
+import hashlib
+import hmac
+import json
 import importlib.util
 from pathlib import Path
 
@@ -121,6 +124,25 @@ def test_archive_waits_for_a_durable_running_job(platform):
     assert response.status_code == 409
     with factory() as db:
         assert db.get(Site, site_id).archived_at is None
+
+
+def test_archived_site_acknowledges_signed_notifications_without_work(platform):
+    from datetime import datetime, timezone
+    client, factory, site_id = platform
+    secret = 'archive-notification-secret-long-enough-for-testing'
+    assert client.put(f'/api/v1/sites/{site_id}/connections/wordpress',
+                      json={'credentials': {'webhook_secret': secret}, 'settings': {}}).status_code == 200
+    assert client.post(f'/api/v1/sites/{site_id}/archive').status_code == 200
+    body = json.dumps({'event': 'post.changed', 'occurred_at': datetime.now(timezone.utc).isoformat(),
+                       'data': {'id': 9, 'resource_type': 'posts'}}).encode()
+    url = f'/api/v1/webhooks/wordpress/{site_id}'
+    assert client.post(url, content=body, headers={'X-ForgeSEO-Signature': 'bad'}).status_code == 401
+    signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    response = client.post(url, content=body, headers={'X-ForgeSEO-Signature': signature})
+    assert response.status_code == 202
+    assert response.json() == {'status': 'ignored', 'reason': 'site_archived'}
+    with factory() as db:
+        assert db.scalar(select(Job.id).where(Job.site_id == site_id)) is None
 
 
 def test_archive_migration_upgrades_legacy_database_without_losing_sites():

@@ -54,6 +54,8 @@ async def wordpress_event(site_id:str,request:Request,db=Depends(get_db)):
             raise ValueError('Unsupported notification target')
     except (ValueError,TypeError,KeyError,AttributeError):
         raise HTTPException(422,'Malformed or expired notification')
+    if site.archived_at is not None:
+        return {'status':'ignored','reason':'site_archived'}
     operation=data.get('operation_key')
     if operation and db.scalar(select(Publication).where(Publication.site_id==site_id,Publication.operation_key==operation)):
         return {'status':'ignored','reason':'platform_write_already_has_verification'}
