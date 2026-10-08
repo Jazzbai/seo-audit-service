@@ -99,7 +99,7 @@ export function Field({ label, hint, error, children, required }: { label: strin
 }
 
 export function TableShell({ children, caption }: { children: ReactNode; caption?: string }) {
-  return <div className="table-wrap"><table>{caption && <caption className="sr-only">{caption}</caption>}{children}</table></div>
+  return <div className="table-wrap" role="region" aria-label={caption ? `${caption} table` : 'Scrollable table'} tabIndex={0}><table>{caption && <caption className="sr-only">{caption}</caption>}{children}</table></div>
 }
 
 export function Kicker({ children }: { children: ReactNode }) {

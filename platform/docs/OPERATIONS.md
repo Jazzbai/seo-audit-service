@@ -148,10 +148,20 @@ pagination behavior before retrying an inconsistent response.
 ## Google Search Console and GA4 OAuth
 
 The Connections screen supports a bounded **Connect with Google** flow for
-Search Console and GA4 only. An owner first saves the provider's OAuth client
-ID and client secret in that site's connection card, then starts the flow from
-the same card. The secret is encrypted with the site's existing credential
-envelope; it is never returned to the browser after saving.
+Search Console and GA4 only. The platform operator configures
+`GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` on the backend resource
+in Coolify, available at runtime only (not buildtime, not multiline; Literal
+enabled). Save each variable, then deploy the reviewed backend and frontend
+release. The Compose definitions explicitly forward these variables to the API
+and workers. Never add them to frontend `VITE_` variables or store a customer's
+refresh token in the platform environment.
+
+Customers do not need a Cloud project, client secret, or API key. An owner saves
+the site's property/reporting settings and uses **Connect with Google** to
+authorize their account. The site-scoped readiness endpoint discloses only
+whether platform setup is complete, not the client ID or secret. Missing or
+partial configuration hides the link and directs customers to their platform
+administrator.
 
 Register this exact redirect URI in the Google OAuth client configuration,
 using the deployed `PUBLIC_URL`:
@@ -167,14 +177,37 @@ tampered, expired, cross-site, and sessionless callbacks. Successful token
 responses are stored encrypted and redirect back to the site's Connections
 screen with a non-secret result; provider tokens are never placed in the URL.
 
-The existing manual refresh-token fields remain supported. If Google does not
-return a replacement refresh token during reauthorization, the previously
-stored refresh token is retained. Run the normal connection test after a
-successful authorization before enabling measurement jobs. For GSC and GA4,
+Tokens are encrypted separately for each site and provider, bound to the
+issuing client ID, and never returned in connection views. Platform secrets
+remain in runtime configuration, not customer connection records. Changing
+the client ID requires fresh authorization; rotating the secret for the same
+client ID retains the site's grant. Reauthorization retains a refresh token
+only when it belongs to the same platform client. Revoked connections cannot
+be revived by a callback that was already in flight. Broader-than-requested
+or unknown token scopes are rejected in platform mode.
+
+For existing self-hosted installations only, saved encrypted per-site clients
+remain usable through the legacy API when neither platform variable is set.
+Once either variable is set, there is no fallback to those clients. The
+customer UI no longer exposes manual credential fields in either mode.
+
+Run the normal connection test after successful authorization before enabling
+measurement jobs. Property selection is still entered manually; authorization
+alone does not prove that the chosen property belongs to the intended site.
+For GSC and GA4,
 that test makes one read-only provider request and stores only a bounded
 verified/error summary; it does not store provider response bodies or change
 Google data. Tests for paid providers do not make an implicit paid request;
 run their budgeted collection workflow explicitly after pricing is configured.
+
+External Google apps in Testing issue refresh tokens that expire after seven
+days for these scopes. Add intended test accounts and keep automation paused
+during setup. Production rollout needs the normal Google publishing and
+verification review; do not bypass it. This client serves direct read-only
+dashboard reporting, not new AI-agent Google tools or MCP access.
+
+References: [Coolify environment variables](https://coolify.io/docs/applications/configuration/environment-variables),
+[Google OAuth and token expiration](https://developers.google.com/identity/protocols/oauth2).
 
 ## WordPress targeted change notifications
 

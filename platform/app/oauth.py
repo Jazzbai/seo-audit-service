@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import _authenticated_session, require_role, require_site
 from app.config import settings
+from app.google_config import CLIENT, MODE, platform_client, platform_requested
 from app.connectors.security import decrypt_credentials, encrypt_credentials
 from app.db import get_db
 from app.models import Connection, Site, utcnow
@@ -124,6 +125,12 @@ def _connection_credentials(row: Connection | None) -> dict[str, Any]:
 
 def _required_client_credentials(row: Connection | None) -> tuple[dict[str, Any], str, str]:
     credentials = _connection_credentials(row)
+    if platform_requested():
+        try:
+            client_id, client_secret = platform_client()
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from None
+        return credentials, client_id, client_secret
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
     if (
@@ -227,6 +234,8 @@ def _remember_pending_state(
     if locked is None:
         raise HTTPException(status_code=409, detail="The Google connection is no longer available")
     credentials, client_id, _client_secret = _required_client_credentials(locked)
+    if payload.get('oauth_client_id') != client_id:
+        raise HTTPException(409, 'Google connection setup changed. Start authorization again')
     now = int(time.time())
     existing = credentials.get(_OAUTH_PENDING_STATES_KEY)
     pending = [
@@ -261,6 +270,8 @@ def _consume_pending_state(
     if locked is None:
         raise HTTPException(status_code=400, detail="OAuth state has already been used or is no longer valid")
     credentials, client_id, client_secret = _required_client_credentials(locked)
+    if payload.get('oauth_client_id') != client_id:
+        raise HTTPException(400, 'Google connection setup changed. Start authorization again')
     entries = credentials.get(_OAUTH_PENDING_STATES_KEY)
     if not isinstance(entries, list):
         raise HTTPException(status_code=400, detail="OAuth state has already been used or is no longer valid")
@@ -417,10 +428,30 @@ def _persist_token(
     existing: dict[str, Any],
     token_payload: dict[str, Any],
     kind: str,
+    expected_client_id: str,
 ) -> None:
-    # Only values from Google's validated token response are copied. Existing
-    # client credentials and the manual refresh-token entry remain encrypted.
+    # Only validated provider tokens are copied. Platform credentials stay in
+    # runtime configuration; a site's grant is bound to its issuing client.
+    expected_ciphertext = row.encrypted_credentials
+    locked = db.scalar(select(Connection).where(Connection.id == row.id).with_for_update()
+                       .execution_options(populate_existing=True))
+    if locked is None or locked.status == 'revoked' or locked.encrypted_credentials != expected_ciphertext:
+        raise HTTPException(409, 'Google connection changed during authorization. Start again')
+    row = locked
+    _credentials, current_client_id, _secret = _required_client_credentials(row)
+    if current_client_id != expected_client_id:
+        raise HTTPException(409, 'Google connection setup changed. Start authorization again')
     updated = dict(existing)
+    if platform_requested():
+        client_id, _secret = platform_client()
+        same_client = existing.get(MODE) == 'platform' and existing.get(CLIENT) == client_id
+        for key in ('client_id', 'client_secret', 'token_url'):
+            updated.pop(key, None)
+        if not same_client:
+            for key in ('access_token', 'refresh_token', 'token_type', 'expires_at'):
+                updated.pop(key, None)
+        updated[MODE], updated[CLIENT] = 'platform', client_id
+        existing = dict(updated)
     updated["access_token"] = token_payload["access_token"]
     returned_refresh = token_payload.get("refresh_token")
     if isinstance(returned_refresh, str) and returned_refresh:
@@ -505,7 +536,14 @@ async def _callback(
     except OAuthExchangeError:
         return _redirect_result(site.id, kind=kind, result="error", reason="token_exchange_failed")
 
-    _persist_token(db, site, locked_row, existing, token_payload, kind)
+    if platform_requested():
+        scope = token_payload.get('scope')
+        allowed = set(GOOGLE_SCOPES.values())
+        granted = set(scope.split()) if isinstance(scope, str) else set()
+        if GOOGLE_SCOPES[kind] not in granted or not granted <= allowed:
+            return _redirect_result(site.id, kind=kind, result='error', reason='unexpected_permissions')
+
+    _persist_token(db, site, locked_row, existing, token_payload, kind, client_id)
     return _redirect_result(site.id, kind=kind, result="connected")
 
 
@@ -520,8 +558,17 @@ def oauth_start(
     kind = _assert_kind(kind)
     site = require_site(db, context, site_id)
     row = find_connection(db, site.id, kind)
-    _required_client_credentials(row)
+    _credentials, client_id, _secret = _required_client_credentials(row)
     redirect_uri = callback_url()
+    if row is None:
+        row = Connection(site_id=site.id, kind=kind, status='needs_test',
+                         encrypted_credentials=encrypt_credentials({}, settings.ENCRYPTION_KEY))
+        db.add(row)
+        db.flush()
+    elif row.status == 'revoked' and platform_requested():
+        # Explicit owner reconnection starts without reviving the revoked grant.
+        row.encrypted_credentials = encrypt_credentials({}, settings.ENCRYPTION_KEY)
+        row.status, row.checked_at = 'needs_test', None
     state_payload = _state_payload(
         session=session,
         user_id=user.id,
@@ -529,6 +576,7 @@ def oauth_start(
         site_id=site.id,
         kind=kind,
     )
+    state_payload['oauth_client_id'] = client_id
     state = _encode_state(state_payload)
     _locked_row, _credentials, client_id = _remember_pending_state(
         db, row, state_payload
@@ -541,7 +589,7 @@ def oauth_start(
         'state': state,
         'access_type': 'offline',
         'prompt': 'consent',
-        'include_granted_scopes': 'true',
+        'include_granted_scopes': 'false',
     })}"
     response = RedirectResponse(location, status_code=307)
     response.headers["Cache-Control"] = "no-store"

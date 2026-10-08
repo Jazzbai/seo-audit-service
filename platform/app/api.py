@@ -5,7 +5,7 @@ import asyncio
 import csv
 import io
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any
 from urllib.parse import urlsplit
@@ -52,7 +52,7 @@ class SitePatch(Input):
 
 
 class ConnectionInput(Input):
-    credentials: dict[str, Any]
+    credentials: dict[str, Any] = Field(default_factory=dict)
     settings: dict = Field(default_factory=dict)
 
 
@@ -204,6 +204,44 @@ def own(db, cls, row_id, site_id):
     if row is None:
         raise HTTPException(404, "Item not found")
     return row
+
+
+def require_unpaused_submission(db, site):
+    """Reject new manual paid/write requests instead of silently holding them."""
+    if site.paused or global_controls(db).get('global_pause'):
+        raise HTTPException(409, 'Automation is paused. No job was queued. Review site and workspace pause controls before generating or publishing.')
+
+
+def browser_coverage_view(db, site_id):
+    """Bounded recent samples, never a claim of complete site rendering."""
+    query = select(Job).where(Job.site_id == site_id, Job.kind == 'browser',
+                              Job.created_at >= now() - timedelta(days=7))
+    recent = list(db.scalars(query.order_by(Job.created_at.desc(), Job.id.desc()).limit(201)))
+    limited = len(recent) > 200
+    latest = {}
+    for job in recent[:200]:
+        payload = job.payload if isinstance(job.payload, dict) else {}
+        key = payload.get('page_id') or job.id
+        latest.setdefault(str(key), job)
+    counts = {'complete_samples': 0, 'partial_samples': 0, 'pending_samples': 0, 'unverified_samples': 0}
+    for job in latest.values():
+        result = job.result if isinstance(job.result, dict) else {}
+        if (job.status == 'complete' and result.get('complete') is True
+                and type(result.get('status_code')) is int and result['status_code'] == 200
+                and type(result.get('resource_failures')) is int and result['resource_failures'] == 0):
+            counts['complete_samples'] += 1
+        elif job.status in {'queued', 'retry', 'running'}:
+            counts['pending_samples'] += 1
+        elif job.status in {'partial', 'failed', 'blocked'}:
+            counts['partial_samples'] += 1
+        else:
+            counts['unverified_samples'] += 1
+    status = ('not_checked' if not latest else 'partial' if counts['partial_samples'] else
+              'pending' if counts['pending_samples'] else 'needs_review' if counts['unverified_samples'] or limited else 'samples_complete')
+    return {'status': status, 'scope': 'latest_per_page_in_recent_200_jobs',
+            'window_days': 7, 'sample_count': len(latest), 'limited': limited, **counts,
+            'last_check_at': iso(recent[0].updated_at) if recent else None,
+            'message': 'Recent browser samples are separate from source-HTML crawl coverage and do not establish that every page or external resource was inspected.'}
 
 
 def candidate_for_site(db, candidate_id: str, site_id: str):
@@ -575,6 +613,7 @@ def overview(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
                          "last_audit_at": iso(audit.updated_at) if audit else None,
                          "error_count": len(audit_errors),
                          "pending_url_count": len(pending_urls)},
+            "browser_coverage": browser_coverage_view(db, site_id),
             "connections": [connection_view(c) for c in db.scalars(select(Connection).where(Connection.site_id == site_id))]}
 
 
@@ -594,11 +633,30 @@ async def discover_site_authors(site_id: str, response: Response, ctx=Depends(re
     return result
 
 
+@router.get('/sites/{site_id}/google-oauth/config')
+def google_oauth_config(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    guard(db, ctx, site_id)
+    from app.google_config import platform_client
+    from app.oauth import callback_url
+    try:
+        platform_client()
+        configured = True
+    except ValueError:
+        configured = False
+    return {'configured': configured, 'mode': 'platform', 'callback_url': callback_url(),
+            'message': 'Connect your Google account; no API keys are needed.' if configured else
+                       'The platform administrator must finish Google connection setup.'}
+
+
 @router.put("/sites/{site_id}/connections/{kind}")
 def save_connection(site_id: str, kind: str, payload: ConnectionInput, ctx=Depends(require_user), db=Depends(get_db)):
     site = guard(db, ctx, site_id, owner=True)
     if kind not in {'wordpress','woocommerce','gsc','ga4','dataforseo','ai','pagespeed','smtp','microsoft_graph'}:
         raise HTTPException(422, 'Unsupported connection type')
+    if kind in {'gsc', 'ga4'}:
+        from app.google_config import platform_requested
+        if platform_requested() and any(value not in ('', None) for value in payload.credentials.values()):
+            raise HTTPException(422, 'Google credentials are platform-managed. Use Connect with Google.')
     allowed = {'base_url','endpoint','provider','request_format','model','estimated_cost_cents','max_cost_cents','site_url','property_id','conversion_event_names','dimensions','metrics','keywords','questions','url','strategy','categories',
                'language_code','locale','search_context_size','location_code','host','port','sender','recipients','ssl','starttls','digest_enabled',
                'price_per_input_million','price_per_output_million','max_output_tokens','country','device'}
@@ -916,6 +974,8 @@ def add_job(site_id: str, payload: JobInput, ctx=Depends(require_user), db=Depen
         owner=full_cycle_mode_value == 'autopilot',
         write=full_cycle_mode_value != 'autopilot',
     )
+    if payload.kind in {'generate', 'publish'}:
+        require_unpaused_submission(db, site)
     return enqueue_response(db, site, payload.kind, payload.payload, payload.idempotency_key)
 
 
@@ -923,6 +983,29 @@ def add_job(site_id: str, payload: JobInput, ctx=Depends(require_user), db=Depen
 def get_job(site_id: str, job_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     guard(db, ctx, site_id)
     return _job_view(own(db, Job, job_id, site_id), include_idempotency_key=True)
+
+
+@router.post('/sites/{site_id}/jobs/{job_id}/cancel')
+def cancel_job(site_id: str, job_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    site = guard(db, ctx, site_id, write=True)
+    row = own(db, Job, job_id, site_id)
+    if row.status == 'cancelled':
+        return _job_view(row, include_idempotency_key=True)
+    if row.status not in {'queued', 'retry'}:
+        raise HTTPException(409, 'Only waiting jobs can be cancelled. Running or completed work requires its verified recovery workflow.')
+    changed = db.execute(update(Job).where(
+        Job.id == job_id, Job.site_id == site_id, Job.status.in_(['queued', 'retry']),
+    ).values(status='cancelled', lease_until=None, updated_at=now(),
+             result={**(row.result if isinstance(row.result, dict) else {}),
+                     'status': 'cancelled', 'reason': 'user_cancelled', 'cancelled_by': ctx['user_id']}))
+    if changed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, 'This job started or changed while cancellation was requested. Reload its current state.')
+    db.refresh(row)
+    event(db, site, 'job_cancelled', 'Waiting job cancelled; no remote rollback requested',
+          {'job_id': row.id, 'kind': row.kind, 'user_id': ctx['user_id']})
+    db.commit()
+    return _job_view(row, include_idempotency_key=True)
 
 
 @router.post('/sites/{site_id}/articles', status_code=201)
@@ -1114,6 +1197,7 @@ def publish_article(site_id: str, article_id: str, ctx=Depends(require_user), db
     article = own(db, Article, article_id, site_id)
     if article.status == 'rolled_back':
         raise HTTPException(409, 'This publication was rolled back. Review a new article operation before publishing again.')
+    require_unpaused_submission(db, site)
     try:
         return _job_view(enqueue_article_publish(db, site, article_id, requested_by=ctx['user_id']), include_idempotency_key=True)
     except ValueError as exc:

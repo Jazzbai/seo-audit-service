@@ -2,6 +2,7 @@
 import pytest
 from sqlalchemy import select
 
+from app.config import settings
 from app.models import Article, Job, Site, Team
 from app.operations import enqueue
 from test_platform import platform
@@ -26,6 +27,15 @@ def test_browser_reuses_scheduled_publication_without_redispatch(platform, monke
         db.add(job)
         db.commit()
         job_id, article_id = job.id, article.id
+    response = client.post(f'/api/v1/sites/{site_id}/articles/{article_id}/publish')
+    # Manual submission now fails closed while paused; observing an existing
+    # attempt is always available through GET /jobs/{id}, without reposting.
+    assert response.status_code == 409
+    assert client.get(f'/api/v1/sites/{site_id}/jobs/{job_id}').json()['status'] == status
+    with factory() as db:
+        db.get(Site, site_id).paused = False
+        db.commit()
+    monkeypatch.setattr(settings, 'GLOBAL_PAUSE', False)
     response = client.post(f'/api/v1/sites/{site_id}/articles/{article_id}/publish')
     assert response.status_code == 202, response.text
     assert response.json()['id'] == job_id

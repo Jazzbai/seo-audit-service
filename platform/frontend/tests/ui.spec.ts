@@ -23,6 +23,28 @@ const overview = {
   connections: [{ kind: 'wordpress', status: 'connected', checked_at: '2026-09-14T14:00:00Z' }],
 }
 
+for (const renderedState of ['missing', 'partial', 'samples_complete']) test(`source completion does not imply whole-site rendering: ${renderedState}`, async ({ page }) => {
+  await installWorkspaceMocks(page, {
+    coverage: { status: 'complete', last_audit_at: new Date().toISOString(), error_count: 0, pending_url_count: 0 },
+    browserCoverage: renderedState === 'missing' ? undefined : {
+      status: renderedState, window_days: 7, sample_count: 2,
+      complete_samples: renderedState === 'samples_complete' ? 2 : 0,
+      partial_samples: renderedState === 'partial' ? 2 : 0,
+      pending_samples: 0, unverified_samples: 0, limited: false,
+    },
+  })
+  await page.goto('/sites/site-1/overview')
+  const rendered = page.getByRole('list', { name: 'Monitoring and coverage signals' }).getByRole('listitem').filter({ hasText: 'Browser-rendered checks' })
+  await expect(page.getByText('Source-HTML coverage', { exact: true })).toBeVisible()
+  if (renderedState === 'missing') {
+    await expect(rendered).toContainText('No verified recent browser coverage is available')
+    await expect(rendered).toContainText('does not establish rendered coverage')
+  } else {
+    await expect(rendered).toContainText(renderedState === 'partial' ? '0 of 2 recent page samples completed; 2 partial or failed' : '2 of 2 recent page samples completed; 0 partial or failed')
+    await expect(rendered).toContainText('not proof that every page or external resource was inspected')
+  }
+})
+
 const completeFullCycleResult: Record<string, unknown> = {
   workflow: 'full_cycle',
   complete: true,
@@ -70,7 +92,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installWorkspaceMocks(page: Page, options: { initialized?: boolean; authorized?: boolean; emptySites?: boolean; failOverview?: boolean; failJobs?: boolean; failIncidents?: boolean; jobs?: unknown[]; incidents?: unknown[]; measurements?: unknown[]; connectionItems?: unknown[]; articles?: unknown[]; pages?: unknown[]; fullCycleStatus?: string; fullCycleResult?: Record<string, unknown>; monitoring?: Partial<typeof overview.monitoring>; coverage?: Partial<typeof overview.coverage> } = {}) {
+async function installWorkspaceMocks(page: Page, options: { initialized?: boolean; authorized?: boolean; emptySites?: boolean; failOverview?: boolean; failJobs?: boolean; failIncidents?: boolean; jobs?: unknown[]; incidents?: unknown[]; measurements?: unknown[]; connectionItems?: unknown[]; articles?: unknown[]; pages?: unknown[]; fullCycleStatus?: string; fullCycleResult?: Record<string, unknown>; monitoring?: Partial<typeof overview.monitoring>; coverage?: Partial<typeof overview.coverage>; browserCoverage?: Record<string, unknown> } = {}) {
   let authorized = options.authorized ?? true
   let failOverview = options.failOverview ?? false
   let failJobs = options.failJobs ?? false
@@ -94,10 +116,11 @@ async function installWorkspaceMocks(page: Page, options: { initialized?: boolea
     if (path === '/sites' && method === 'GET') return json(route, { items: options.emptySites && !createdSite ? [] : [site], total: options.emptySites && !createdSite ? 0 : 1 })
     if (path === '/sites' && method === 'POST') { createdSite = true; return json(route, { ...site, name: 'Northstar Studio' }) }
     if (path === '/sites/site-1' && method === 'GET') return json(route, site)
+    if (path === '/sites/site-1/google-oauth/config' && method === 'GET') return json(route, { configured: true, mode: 'platform', callback_url: 'https://forge.example/api/v1/oauth/google/callback', message: 'Ready' })
     if (path === '/sites/site-1/overview' && method === 'GET') {
       overviewRequestCount += 1
       const responseOverview = createdSite ? {...overview,site:{...site,name:'Northstar Studio'}} : overview
-      return failOverview ? json(route, { detail: 'The monitoring service is temporarily unavailable.' }, 503) : json(route, { ...responseOverview, monitoring: { ...responseOverview.monitoring, ...options.monitoring }, coverage: { ...responseOverview.coverage, ...options.coverage } })
+      return failOverview ? json(route, { detail: 'The monitoring service is temporarily unavailable.' }, 503) : json(route, { ...responseOverview, browser_coverage: options.browserCoverage, monitoring: { ...responseOverview.monitoring, ...options.monitoring }, coverage: { ...responseOverview.coverage, ...options.coverage } })
     }
     if (path === '/sites/site-1/jobs' && method === 'GET') {
       return failJobs ? json(route, { detail: 'The run history service is temporarily unavailable.' }, 503) : json(route, { items: options.jobs ?? [], total: options.jobs?.length ?? 0 })
@@ -797,8 +820,8 @@ test('Google connection cards explain the bounded OAuth flow and keep the start 
 
   const gsc = page.locator('form.connection-card').filter({ hasText: 'Google Search Console' }).first()
   const ga4 = page.locator('form.connection-card').filter({ hasText: 'Google Analytics 4' }).first()
-  await expect(gsc.getByText('Save the OAuth client ID and secret first, then authorize read-only Search Console access. Tokens stay encrypted on this site.')).toBeVisible()
-  await expect(ga4.getByText('Save the OAuth client ID and secret first, then authorize read-only Analytics 4 access. Tokens stay encrypted on this site.')).toBeVisible()
+  await expect(gsc.getByText('Authorize read-only Search Console access for this site.')).toBeVisible()
+  await expect(ga4.getByText('Authorize read-only Analytics 4 access for this site.')).toBeVisible()
   await expect(gsc.getByRole('link', { name: 'Connect with Google' })).toHaveAttribute('href', '/api/v1/sites/site-1/connections/gsc/oauth/start')
   await expect(ga4.getByRole('link', { name: 'Connect with Google' })).toHaveAttribute('href', '/api/v1/sites/site-1/connections/ga4/oauth/start')
 })
@@ -849,7 +872,7 @@ test('GA4 settings save bounded conversion reporting lists and reload without ec
   await expect(ga4.getByText('Optional. Comma-separated GA4 event names to report as business conversions; up to 12 names. This does not create or change events in Google Analytics.', { exact: true })).toBeVisible()
   await expect(ga4.getByText('Optional. Comma-separated GA4 dimensions, up to 8. Include eventName when you need to compare conversion events; leave blank for the default date view.', { exact: true })).toBeVisible()
   await expect(ga4.getByText('Optional. Comma-separated GA4 metrics, up to 10. Include conversions for conversion-aware reporting; leave blank for the default sessions and users view.', { exact: true })).toBeVisible()
-  await expect(ga4.getByLabel('Client secret', { exact: true })).toHaveValue('')
+  await expect(ga4.getByLabel('Client secret', { exact: true })).toHaveCount(0)
   await expect(page.getByText('must-not-render-client-secret', { exact: true })).toHaveCount(0)
   await expect(page.getByText('must-not-render-refresh-token', { exact: true })).toHaveCount(0)
 

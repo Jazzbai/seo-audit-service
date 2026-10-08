@@ -134,6 +134,7 @@ export interface Overview {
   } | null
   recent_events: EventRecord[]
   coverage: { status: string; last_audit_at?: string | null; error_count?: number; pending_url_count?: number }
+  browser_coverage?: { status: string; sample_count: number; complete_samples: number; partial_samples: number; pending_samples: number; unverified_samples: number; limited: boolean; window_days: number; last_check_at?: string | null; message?: string }
   connections: Connection[]
 }
 

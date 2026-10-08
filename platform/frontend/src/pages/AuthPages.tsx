@@ -44,7 +44,7 @@ export function LoginPage() {
   return (
     <div className="auth-layout">
       <AuthAside />
-      <main className="auth-main">
+      <main id="main-content" className="auth-main" tabIndex={-1}>
         <div className="auth-card">
           <p className="eyebrow">Welcome back</p>
           <h2>Sign in to ForgeSEO</h2>
@@ -88,7 +88,7 @@ export function BootstrapPage() {
   return (
     <div className="auth-layout">
       <AuthAside bootstrap />
-      <main className="auth-main">
+      <main id="main-content" className="auth-main" tabIndex={-1}>
         <div className="auth-card">
           <p className="eyebrow">Set up your workspace</p>
           <h2>Create the first owner account</h2>

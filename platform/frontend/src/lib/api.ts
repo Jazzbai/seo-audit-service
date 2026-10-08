@@ -187,7 +187,7 @@ export const sitesApi = {
 
 export const connectionsApi = {
   list: (siteId: string) => list<Connection>(`/sites/${encode(siteId)}/connections`),
-  save: (siteId: string, kind: string, body: { credentials: Record<string, unknown>; settings: Record<string, unknown> }) =>
+  save: (siteId: string, kind: string, body: { credentials?: Record<string, unknown>; settings: Record<string, unknown> }) =>
     request<Connection>(`/sites/${encode(siteId)}/connections/${encode(kind)}`, { method: 'PUT', body }),
   reviewMicrosoftGraphScope: (siteId: string, body: { confirms_mailbox_scoped: true; confirms_no_unscoped_send: true; evidence: string }) =>
     request<Connection>(`/sites/${encode(siteId)}/connections/microsoft_graph/scope-review`, { method: 'POST', body }),
@@ -195,6 +195,17 @@ export const connectionsApi = {
     `${API_ROOT}/sites/${encode(siteId)}/connections/${encode(kind)}/oauth/start`,
   test: (siteId: string, kind: string) => request<Job>(`/sites/${encode(siteId)}/connections/${encode(kind)}/test`, { method: 'POST', body: {} }),
   revoke: (siteId: string, kind: string) => request<void>(`/sites/${encode(siteId)}/connections/${encode(kind)}`, { method: 'DELETE' }),
+}
+
+export interface GoogleOAuthConfig {
+  configured: boolean
+  mode: 'platform'
+  callback_url: string
+  message: string
+}
+
+export const googleOAuthApi = {
+  config: (siteId: string) => request<GoogleOAuthConfig>(`/sites/${encode(siteId)}/google-oauth/config`, { cache: 'no-store' }),
 }
 
 export const authorsApi = {
@@ -228,10 +239,11 @@ export const jobsApi = {
     request<Job>(`/sites/${encode(siteId)}/jobs`, { method: 'POST', body }),
   list: (siteId: string, params?: Record<string, string | number | undefined>) => list<Job>(`/sites/${encode(siteId)}/jobs`, params),
   get: <T extends Job = Job>(siteId: string, jobId: string) => request<T>(`/sites/${encode(siteId)}/jobs/${encode(jobId)}`),
+  cancel: (siteId: string, jobId: string) => request<Job>(`/sites/${encode(siteId)}/jobs/${encode(jobId)}/cancel`, { method: 'POST', body: {} }),
   wait: async <T extends Job = Job>(siteId: string, jobId: string, options: { timeoutMs?: number; intervalMs?: number; onUpdate?: (job: T) => void } = {}): Promise<T> => {
     const timeoutMs = Math.max(0, options.timeoutMs ?? 20_000)
     const intervalMs = Math.max(250, options.intervalMs ?? 1_000)
-    const terminal = new Set(['complete', 'partial', 'failed', 'blocked', 'needs_reconciliation', 'ambiguous', 'rolled_back'])
+    const terminal = new Set(['complete', 'partial', 'failed', 'blocked', 'cancelled', 'needs_reconciliation', 'ambiguous', 'rolled_back'])
     const held = (candidate: T) => candidate.status === 'queued' && candidate.result?.status === 'held'
     const started = Date.now()
     let job = await jobsApi.get<T>(siteId, jobId)

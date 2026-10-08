@@ -51,21 +51,38 @@ export function ActivityPage() {
 
 export function JobsPage() {
   const siteId = useSiteId()
+  const { role } = useAuth()
   const loader = useCallback(() => jobsApi.list(siteId, { limit: 200 }), [siteId])
   const resource = useResource(loader, [siteId])
   const [liveProgress, setLiveProgress] = useState<JobProgress | null>(null)
+  const [cancelling, setCancelling] = useState<string | null>(null)
+  const [cancelMessage, setCancelMessage] = useState<string | null>(null)
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const onProgress = useCallback((progress: JobProgress) => setLiveProgress(progress), [])
   const stream = useSiteEventStream(siteId, { enabled: resource.data !== null, onProgress })
   useEffect(() => { setLiveProgress(null) }, [siteId])
+  useEffect(() => { setCancelMessage(null); setCancelError(null); setCancelling(null) }, [siteId])
+  async function cancelWaitingJob(job: Job) {
+    if (!window.confirm('Cancel this waiting job? This does not undo changes or stop future recurring checks.')) return
+    setCancelling(job.id); setCancelMessage(null); setCancelError(null)
+    try {
+      await jobsApi.cancel(siteId, job.id)
+      setCancelMessage('Waiting job cancelled. No remote changes were undone; future recurring checks are unchanged.')
+      await resource.reload()
+    } catch (error) { setCancelError(detailMessage(error)); await resource.reload() }
+    finally { setCancelling(null) }
+  }
 
   return <>
     <PageHeader eyebrow="Operations" title="Run history" description="Recent jobs recorded for this site, including their current status and retry count." actions={<button className="button button-secondary" onClick={() => void resource.reload()}><RefreshCw size={15} /> Refresh</button>} />
+    {cancelMessage && <div className="mb-20"><Notice kind="success">{cancelMessage}</Notice></div>}
+    {cancelError && <div className="mb-20"><Notice kind="error">{cancelError}</Notice></div>}
     {resource.loading && !resource.data ? <LoadingState label="Loading recent jobs" /> : resource.error && !resource.data ? <ErrorState message={resource.error} onRetry={() => void resource.reload()} /> : !resource.data ? <ErrorState message="No jobs response was returned." onRetry={() => void resource.reload()} /> : <>
       <JobProgressBanner progress={liveProgress} streamStatus={stream.status} />
       {resource.stale && <StaleState onRefresh={() => void resource.reload()} />}
       {resource.error && <div className="mt-20"><ErrorState message={resource.error} onRetry={() => void resource.reload()} /></div>}
       <Panel padded={false}>
-        {resource.data.items.length ? <JobTable jobs={resource.data.items} /> : <EmptyState icon={<Clock3 size={20} />} title="No jobs yet" description="No runs have been recorded for this site. An empty run history is not proof that the site is optimized; check audit coverage and findings." />}
+        {resource.data.items.length ? <JobTable jobs={resource.data.items} onCancel={role !== 'viewer' ? (job) => void cancelWaitingJob(job) : undefined} cancelling={cancelling} /> : <EmptyState icon={<Clock3 size={20} />} title="No jobs yet" description="No runs have been recorded for this site. An empty run history is not proof that the site is optimized; check audit coverage and findings." />}
       </Panel>
     </>}
   </>
@@ -152,9 +169,9 @@ function JobProgressBanner({ progress, streamStatus }: { progress: JobProgress |
   return <div className="mb-20"><Notice kind={progressNoticeKind(progress.status)} title={reconnecting ? 'Live updates are reconnecting' : 'Live run update'}>{message}{detail && ` ${detail}`}{reconnecting && ' New progress updates will appear when the connection is restored.'}</Notice></div>
 }
 
-function JobTable({ jobs }: { jobs: Job[] }) {
+function JobTable({ jobs, onCancel, cancelling }: { jobs: Job[]; onCancel?: (job: Job) => void; cancelling: string | null }) {
   return <TableShell caption="Run history">
-    <thead><tr><th>Kind</th><th>Status</th><th>Created</th><th>Updated</th><th>Attempts</th><th>Details</th></tr></thead>
+    <thead><tr><th>Kind</th><th>Status</th><th>Created</th><th>Updated</th><th>Attempts</th><th>Details</th><th>Actions</th></tr></thead>
     <tbody>{jobs.map((job) => <tr key={job.id}>
       <td><div className="table-primary">{titleCase(job.kind)}</div></td>
       <td><Badge value={job.status} /></td>
@@ -162,6 +179,7 @@ function JobTable({ jobs }: { jobs: Job[] }) {
       <td className="text-muted">{formatDateTime(job.updated_at)}</td>
       <td className="text-muted">{job.attempts ?? 'Not recorded'}</td>
       <td className="text-muted">{inventoryFailureMessage(job)}</td>
+      <td>{onCancel && ['queued', 'retry'].includes(job.status) ? <Button size="sm" variant="secondary" disabled={cancelling !== null} onClick={() => onCancel(job)}>{cancelling === job.id ? 'Cancelling…' : 'Cancel waiting job'}</Button> : <span className="text-muted">Not available</span>}</td>
     </tr>)}</tbody>
   </TableShell>
 }
@@ -474,6 +492,6 @@ export function WeeklyReportPage() {
   }
 
   return <ResourceStateView resource={resource} empty={<ErrorState message="No weekly report response was returned." onRetry={() => void resource.reload()} />}>
-    {(report) => { const entries = reportEntries(report); const state = reportState(report, entries); return <><PageHeader eyebrow="Operations" title="Weekly report" description="Download the exact report returned by the API, or inspect its scalar measures here. Missing or partial data is not an optimization claim." actions={<><button className="button button-secondary" onClick={() => void resource.reload()}><RefreshCw size={15} /> Refresh</button><button className="button button-primary" onClick={() => void download()}><ArrowDownToLine size={15} /> Download CSV</button></>} />{downloadError && <div className="mb-20"><Notice kind="error">{downloadError}</Notice></div>}{(state.empty || state.partial) && <div className="mb-20"><Notice kind="warning" title={state.empty ? 'Empty weekly report' : 'Partial weekly report'}>{state.noScalarMeasures ? 'The API returned no scalar measures.' : 'The API returned only part of the expected weekly report.'} This is not evidence that the site is optimized; review coverage and source evidence before drawing conclusions.</Notice></div>}<div className="report-hero">{entries.slice(0, 4).map(([key, value]) => <div className="stat-card" key={key}><div className="stat-label">{reportMetricLabel(key)}</div><div className="report-number">{String(value)}</div><div className="report-label">API-reported measure</div></div>)}</div><div className="grid-2 mt-20"><Panel padded><div className="panel-header"><div><h2 className="panel-title">Report measures</h2><p className="panel-subtitle">Only fields present in the weekly response are shown.</p></div><BarChart3 size={19} color="#148b89" /></div>{entries.length ? entries.map(([key, value]) => <div className="metric-row" key={key}><span>{reportMetricLabel(key)}</span><strong>{String(value)}</strong></div>) : <EmptyState icon={<BarChart3 size={20} />} title="No scalar measures" description="The API returned no scalar measures to summarize. This is not evidence that the site is optimized." />}</Panel><Panel padded><div className="panel-header"><div><h2 className="panel-title">Raw report response</h2><p className="panel-subtitle">Useful when the report includes nested source details.</p></div><Clock3 size={18} color="#148b89" /></div><pre className="json-preview">{JSON.stringify(report, null, 2)}</pre></Panel></div></>}}
+    {(report) => { const entries = reportEntries(report); const state = reportState(report, entries); return <><PageHeader eyebrow="Operations" title="Weekly report" description="Download the exact report returned by the API, or inspect its scalar measures here. Missing or partial data is not an optimization claim." actions={<><button className="button button-secondary" onClick={() => void resource.reload()}><RefreshCw size={15} /> Refresh</button><button className="button button-primary" onClick={() => void download()}><ArrowDownToLine size={15} /> Download CSV</button></>} />{downloadError && <div className="mb-20"><Notice kind="error">{downloadError}</Notice></div>}{(state.empty || state.partial) && <div className="mb-20"><Notice kind="warning" title={state.empty ? 'Empty weekly report' : 'Partial weekly report'}>{state.noScalarMeasures ? 'The API returned no scalar measures.' : 'The API returned only part of the expected weekly report.'} This is not evidence that the site is optimized; review coverage and source evidence before drawing conclusions.</Notice></div>}<div className="report-hero">{entries.slice(0, 4).map(([key, value]) => <div className="stat-card" key={key}><div className="stat-label">{reportMetricLabel(key)}</div><div className="report-number">{String(value)}</div><div className="report-label">API-reported measure</div></div>)}</div><div className="grid-2 mt-20"><Panel padded><div className="panel-header"><div><h2 className="panel-title">Report measures</h2><p className="panel-subtitle">Only fields present in the weekly response are shown.</p></div><BarChart3 size={19} color="#148b89" /></div>{entries.length ? entries.map(([key, value]) => <div className="metric-row" key={key}><span>{reportMetricLabel(key)}</span><strong>{String(value)}</strong></div>) : <EmptyState icon={<BarChart3 size={20} />} title="No scalar measures" description="The API returned no scalar measures to summarize. This is not evidence that the site is optimized." />}</Panel><Panel padded><div className="panel-header"><div><h2 className="panel-title">Raw report response</h2><p className="panel-subtitle">Useful when the report includes nested source details.</p></div><Clock3 size={18} color="#148b89" /></div><pre className="json-preview" tabIndex={0} role="region" aria-label="Raw report response">{JSON.stringify(report, null, 2)}</pre></Panel></div></>}}
   </ResourceStateView>
 }

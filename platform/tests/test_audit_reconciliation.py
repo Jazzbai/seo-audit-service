@@ -95,12 +95,129 @@ def test_reconciliation_keeps_redirect_targets_separate_from_page_namespaces():
     assert all(item["namespace"] == "site_reconciliation" for item in result["findings"])
     coverage = result["template_coverage"]
     assert coverage["template_count"] == 2
-    assert coverage["browser_covered_count"] == 1
+    assert coverage["browser_covered_count"] == 0
     assert coverage["browser_pending_count"] == 1
-    assert all(
-        template["coverage_status"] in {"source_only", "source_and_browser"}
-        for template in coverage["templates"]
+    assert coverage["browser_complete"] is False
+    queued_template = next(
+        template for template in coverage["templates"] if template["browser_sample_queued"]
     )
+    assert queued_template["browser_observed"] == 0
+    assert queued_template["coverage_status"] == "browser_pending"
+    assert queued_template["browser_sample_urls"] == ["https://example.test/services/brakes"]
+    assert queued_template["browser_sample_pending"] is True
+    assert any(template["coverage_status"] == "source_only" for template in coverage["templates"])
+
+
+def test_reconciliation_counts_only_complete_browser_observations_as_coverage():
+    page = {
+        "url": "https://example.test/services/brakes",
+        "status_code": 200,
+        "error": None,
+        "resource_type": "pages",
+        "signals": {"source": "source_html", "page_purpose": "informational"},
+    }
+    result = reconcile_site_audit(
+        [page],
+        "https://example.test",
+        browser_sample_urls=[page["url"]],
+        browser_observations=[{
+            "url": page["url"],
+            "status_code": 200,
+            "error": None,
+            "resource_failures": 0,
+            "complete": True,
+        }],
+    )
+
+    coverage = result["template_coverage"]
+    template = coverage["templates"][0]
+    assert coverage["browser_covered_count"] == 1
+    assert coverage["browser_pending_count"] == 0
+    assert coverage["browser_failed_count"] == 0
+    assert coverage["browser_complete"] is True
+    assert template["browser_observed"] == 1
+    assert template["browser_observed_urls"] == [page["url"]]
+    assert template["coverage_status"] == "source_and_browser"
+
+
+def test_reconciliation_without_browser_sample_remains_source_only():
+    result = reconcile_site_audit(
+        [{
+            "url": "https://example.test/services/brakes",
+            "status_code": 200,
+            "error": None,
+            "browser_observed": True,
+            "resource_type": "pages",
+            "signals": {"source": "source_html", "page_purpose": "informational"},
+        }],
+        "https://example.test",
+    )
+
+    coverage = result["template_coverage"]
+    template = coverage["templates"][0]
+    assert coverage["browser_sample_urls"] == []
+    assert coverage["browser_covered_count"] == 0
+    assert coverage["browser_pending_count"] == 0
+    assert coverage["browser_uncovered_count"] == 1
+    assert coverage["browser_complete"] is False
+    assert template["coverage_status"] == "source_only"
+    assert template["browser_sample_queued"] is False
+    assert template["browser_observed"] == 0
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {
+            "status_code": 200,
+            "error": None,
+            "resource_failures": 2,
+            "complete": True,
+        },
+        {
+            "status_code": 200,
+            "error": None,
+            "resource_failures": 2,
+            "complete": False,
+        },
+        {
+            "status_code": 200,
+            "error": None,
+            "resource_failures": 0,
+            "complete": False,
+        },
+        {
+            "status_code": 503,
+            "error": "HTTP 503",
+            "resource_failures": 0,
+            "complete": False,
+        },
+    ],
+)
+def test_reconciliation_does_not_treat_browser_failures_as_complete(observation):
+    url = "https://example.test/services/brakes"
+    result = reconcile_site_audit(
+        [{
+            "url": url,
+            "status_code": 200,
+            "error": None,
+            "resource_type": "pages",
+            "signals": {"source": "source_html", "page_purpose": "informational"},
+        }],
+        "https://example.test",
+        browser_sample_urls=[url],
+        browser_observations=[{"url": url, **observation}],
+    )
+
+    coverage = result["template_coverage"]
+    template = coverage["templates"][0]
+    assert coverage["browser_covered_count"] == 0
+    assert coverage["browser_pending_count"] == 0
+    assert coverage["browser_failed_count"] == 1
+    assert coverage["browser_complete"] is False
+    assert template["browser_observed"] == 0
+    assert template["browser_sample_failed_urls"] == [url]
+    assert template["coverage_status"] == "browser_failed"
 
 
 def test_reconciliation_reports_canonical_collisions_without_inventing_duplicate_content():

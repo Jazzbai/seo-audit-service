@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Eye, EyeOff, History, KeyRound, LockKeyhole, PlugZap, Save, ShieldCheck, Trash2, UserPlus, Users, Zap } from 'lucide-react'
 import { Badge, Button, EmptyState, ErrorState, Field, Notice, PageHeader, Panel } from '../components/ui'
-import { budgetsApi, connectionsApi, detailMessage, jobsApi, operationsApi, policyApi, settingsApi, sitesApi, teamApi } from '../lib/api'
+import { budgetsApi, connectionsApi, detailMessage, googleOAuthApi, jobsApi, operationsApi, policyApi, settingsApi, sitesApi, teamApi } from '../lib/api'
 import { formatCurrencyCents, formatDateTime, formatNumber, titleCase } from '../lib/format'
 import { useAuth } from '../context/AppContext'
 import type { Connection, Policy, PolicySettings, Site } from '../types'
@@ -35,8 +35,8 @@ interface ConnectionDefinition { kind: string; name: string; description: string
 const CONNECTIONS: ConnectionDefinition[] = [
   { kind: 'wordpress', name: 'WordPress', description: 'Inventory, content reads, and protected editorial writes.', fields: [{ key: 'username', label: 'Username', placeholder: 'wp-editor', target: 'credentials' }, { key: 'application_password', label: 'Application password', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'webhook_secret', label: 'Webhook secret', placeholder: 'Optional; leave blank to keep it unset', hint: 'Optional, site-scoped, and stored encrypted. Only needed when the optional ForgeSEO connector sends signed change notifications. Periodic polling continues without it.', secret: true, target: 'credentials' }] },
   { kind: 'woocommerce', name: 'WooCommerce', description: 'Product editorial fields only; commercial fields remain protected.', fields: [{ key: 'consumer_key', label: 'Consumer key', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'consumer_secret', label: 'Consumer secret', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }] },
-  { kind: 'gsc', name: 'Google Search Console', description: 'Search performance and verified property observations.', fields: [{ key: 'site_url', label: 'Property', placeholder: 'sc-domain:example.com', target: 'settings' }, { key: 'client_id', label: 'Client ID', placeholder: 'OAuth client ID', target: 'credentials' }, { key: 'client_secret', label: 'Client secret', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'refresh_token', label: 'Refresh token', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }] },
-  { kind: 'ga4', name: 'Google Analytics 4', description: 'Analytics observations through an authorized property.', fields: [{ key: 'property_id', label: 'Property ID', placeholder: '123456789', maxLength: 64, target: 'settings' }, { key: 'conversion_event_names', label: 'Conversion event names', placeholder: 'generate_lead, purchase', hint: 'Optional. Comma-separated GA4 event names to report as business conversions; up to 12 names. This does not create or change events in Google Analytics.', format: 'csv', maxItems: 12, itemMaxLength: 40, maxLength: 512, target: 'settings' }, { key: 'dimensions', label: 'Reporting dimensions', placeholder: 'date, eventName', hint: 'Optional. Comma-separated GA4 dimensions, up to 8. Include eventName when you need to compare conversion events; leave blank for the default date view.', format: 'csv', maxItems: 8, itemMaxLength: 64, maxLength: 512, target: 'settings' }, { key: 'metrics', label: 'Reporting metrics', placeholder: 'sessions, conversions', hint: 'Optional. Comma-separated GA4 metrics, up to 10. Include conversions for conversion-aware reporting; leave blank for the default sessions and users view.', format: 'csv', maxItems: 10, itemMaxLength: 64, maxLength: 512, target: 'settings' }, { key: 'client_id', label: 'Client ID', placeholder: 'OAuth client ID', target: 'credentials' }, { key: 'client_secret', label: 'Client secret', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'refresh_token', label: 'Refresh token', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }] },
+  { kind: 'gsc', name: 'Google Search Console', description: 'Search performance and verified property observations.', fields: [{ key: 'site_url', label: 'Property', placeholder: 'sc-domain:example.com', target: 'settings' }] },
+  { kind: 'ga4', name: 'Google Analytics 4', description: 'Analytics observations through an authorized property.', fields: [{ key: 'property_id', label: 'Property ID', placeholder: '123456789', maxLength: 64, target: 'settings' }, { key: 'conversion_event_names', label: 'Conversion event names', placeholder: 'generate_lead, purchase', hint: 'Optional. Comma-separated GA4 event names to report as business conversions; up to 12 names. This does not create or change events in Google Analytics.', format: 'csv', maxItems: 12, itemMaxLength: 40, maxLength: 512, target: 'settings' }, { key: 'dimensions', label: 'Reporting dimensions', placeholder: 'date, eventName', hint: 'Optional. Comma-separated GA4 dimensions, up to 8. Include eventName when you need to compare conversion events; leave blank for the default date view.', format: 'csv', maxItems: 8, itemMaxLength: 64, maxLength: 512, target: 'settings' }, { key: 'metrics', label: 'Reporting metrics', placeholder: 'sessions, conversions', hint: 'Optional. Comma-separated GA4 metrics, up to 10. Include conversions for conversion-aware reporting; leave blank for the default sessions and users view.', format: 'csv', maxItems: 10, itemMaxLength: 64, maxLength: 512, target: 'settings' }] },
   { kind: 'dataforseo', name: 'DataForSEO', description: 'Optional keyword, SERP, and policy-driven competitor observations with provider pricing.', fields: [{ key: 'login', label: 'Login', placeholder: 'Provider login', target: 'credentials' }, { key: 'password', label: 'Password', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'location_code', label: 'Location code', placeholder: '2840', hint: 'Required for competitor observations. Use the DataForSEO location code for the site’s target market.', target: 'settings' }] },
   { kind: 'ai', name: 'AI sample provider', description: 'Provider-scoped citation samples, kept distinct from consumer rankings.', fields: [{ key: 'provider', label: 'Provider', placeholder: 'OpenAI', target: 'settings' }, { key: 'endpoint', label: 'Endpoint', placeholder: 'https://api.openai.com/v1/responses', target: 'settings' }, { key: 'request_format', label: 'Request format', placeholder: 'openai_responses_web_search', hint: 'For OpenAI web-grounded samples use openai_responses_web_search. The API requires a completed answer with explicit citations.', target: 'settings' }, { key: 'locale', label: 'Locale', placeholder: 'en-US (optional)', target: 'settings' }, { key: 'search_context_size', label: 'Search context size', placeholder: 'low, medium, or high', hint: 'Low is the conservative default. Higher context can increase provider usage.', target: 'settings' }, { key: 'api_key', label: 'API key', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }] },
   { kind: 'pagespeed', name: 'PageSpeed', description: 'Performance observations for the connected public origin.', fields: [{ key: 'api_key', label: 'API key', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'url', label: 'Sample URL', placeholder: 'Optional; defaults to the site origin', target: 'settings' }, { key: 'strategy', label: 'Strategy', placeholder: 'mobile or desktop', target: 'settings' }] },
@@ -329,7 +329,7 @@ function googleCapabilitySummary(definition: ConnectionDefinition, connection?: 
   const test = capabilityRecord(connection?.capabilities?.last_connection_test)
   const testStatus = typeof test.status === 'string' ? test.status.toLowerCase() : ''
   let state: CapabilitySummaryItem['state'] = 'needs connection'
-  let description = 'Save the Google OAuth credentials and complete authorization before ForgeSEO can read this source.'
+  let description = 'Connect this site with Google before ForgeSEO can read this source.'
   if (['needs_connection', 'revoked', 'disconnected', ''].includes(status ?? '')) {
     state = 'needs connection'
   } else if (status === 'connected' && testStatus === 'verified') {
@@ -340,10 +340,10 @@ function googleCapabilitySummary(definition: ConnectionDefinition, connection?: 
     description = 'The last provider check failed. Review the property and authorization, then run the connection test again.'
   } else {
     state = 'needs review'
-    description = 'OAuth material is saved, but provider access has not been verified yet. Run the connection test before collecting measurements.'
+    description = 'Google access is present, but provider access has not been verified yet. Run the connection test before collecting measurements.'
   }
   return <section aria-labelledby={`${definition.kind}-connection-summary`} style={{ marginBottom: 16 }}>
-    <div style={{ marginBottom: 8 }}><strong id={`${definition.kind}-connection-summary`} className="text-small">Connection check</strong><div className="text-small text-muted">Provider access is separate from saving credentials.</div></div>
+    <div style={{ marginBottom: 8 }}><strong id={`${definition.kind}-connection-summary`} className="text-small">Connection check</strong><div className="text-small text-muted">Google connection status is separate from property settings.</div></div>
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 6, padding: '9px 0', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)' }}>
       <div><div className="text-small" style={{ fontWeight: 700 }}>{definition.name} access</div><div className="text-small text-muted">{description}</div></div>
       <Badge value={state} tone={CAPABILITY_TONES[state]} />
@@ -406,11 +406,24 @@ export function ConnectionsPage() {
  }
 
 function GoogleOAuthControl({ definition, siteId, canEdit }: { definition: ConnectionDefinition; siteId: string; canEdit: boolean }) {
+  const [configured, setConfigured] = useState(false)
+  useEffect(() => {
+    let active = true
+    setConfigured(false)
+    if (definition.kind !== 'gsc' && definition.kind !== 'ga4') return () => { active = false }
+    void googleOAuthApi.config(siteId).then((config) => {
+      if (active) setConfigured(config.configured === true && config.mode === 'platform')
+    }).catch(() => {
+      if (active) setConfigured(false)
+    })
+    return () => { active = false }
+  }, [siteId, definition.kind])
   if (definition.kind !== 'gsc' && definition.kind !== 'ga4') return null
   const provider = definition.kind === 'gsc' ? 'Search Console' : 'Analytics 4'
+  const setupMessage = 'Google setup is managed by your platform administrator. Ask them to finish Google OAuth setup before connecting this property.'
   return <div className="oauth-connect" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: 12, marginBottom: 16, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--surface-muted)' }}>
-    <div><strong className="text-small">Connect with Google</strong><div className="text-small text-muted">Save the OAuth client ID and secret first, then authorize read-only {provider} access. Tokens stay encrypted on this site.</div></div>
-    {canEdit ? <a className="button button-secondary button-sm" href={connectionsApi.oauthStartUrl(siteId, definition.kind)}><KeyRound size={14} /> Connect with Google</a> : <span className="text-small text-muted">Owner access required</span>}
+    <div><strong className="text-small">Connect with Google</strong><div className="text-small text-muted">{configured ? `Authorize read-only ${provider} access for this site.` : setupMessage}</div></div>
+    {configured && canEdit ? <a className="button button-secondary button-sm" href={connectionsApi.oauthStartUrl(siteId, definition.kind)}><KeyRound size={14} /> Connect with Google</a> : <span className="text-small text-muted">{configured ? 'Owner access required' : 'Platform setup required'}</span>}
   </div>
 }
 
@@ -449,7 +462,8 @@ function ConnectionCard({ definition, connection, siteId, canEdit, onChanged, on
         else if (field.format === 'csv') { const items = boundedCsv(field, value); if (items.length) settings[field.key] = items }
         else settings[field.key] = ['estimated_cost_cents','max_cost_cents','location_code'].includes(field.key) ? Number(value) : field.key === 'recipients' ? value.split(',').map(item => item.trim()).filter(Boolean) : value
       }
-      await connectionsApi.save(siteId, definition.kind, { credentials, settings })
+      const body = definition.kind === 'gsc' || definition.kind === 'ga4' ? { settings } : { credentials, settings }
+      await connectionsApi.save(siteId, definition.kind, body)
       await onChanged(`${definition.name} settings saved.`)
     } catch (requestError) { onError(detailMessage(requestError)) }
     finally { setWorking(false) }

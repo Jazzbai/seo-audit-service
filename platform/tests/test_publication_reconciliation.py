@@ -203,11 +203,24 @@ def test_ui_publish_after_reconciliation_queues_one_linked_attempt_and_honors_pa
     reconciliation = client.post(f'{path}/publications/{publication_id}/reconcile')
     assert worker.run_job(reconciliation.json()['id'])['status'] == 'draft_reconciled'
     resumed = client.post(f'{path}/articles/{article_id}/publish')
+    assert resumed.status_code == 409, resumed.text
+    assert 'No job was queued' in resumed.json()['detail']
+    with factory() as db:
+        assert len(db.scalars(select(Job).where(Job.kind == 'publish')).all()) == 1
+        db.get(Site, site_id).paused = False
+        db.commit()
+    monkeypatch.setattr(settings, 'GLOBAL_PAUSE', False)
+    resumed = client.post(f'{path}/articles/{article_id}/publish')
     assert resumed.status_code == 202, resumed.text
     resumed_id = resumed.json()['id']
     assert resumed_id != original_id
     assert resumed.json()['payload']['resumes_job_id'] == original_id
     assert client.post(f'{path}/articles/{article_id}/publish').json()['id'] == resumed_id
+    # Pause again after submission: the execution-time guard must still hold
+    # the canonical recovery job, with no remote writes or duplicate attempts.
+    with factory() as db:
+        db.get(Site, site_id).paused = True
+        db.commit()
     assert worker.run_job(resumed_id) == {'status': 'held', 'reason': 'site_paused'}
     assert remote.write_calls == 0
     with factory() as db:

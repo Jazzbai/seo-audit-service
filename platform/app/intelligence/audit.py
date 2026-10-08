@@ -269,6 +269,7 @@ def reconcile_site_audit(
     origin: str,
     *,
     browser_sample_urls: Iterable[str] | None = None,
+    browser_observations: Iterable[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Reconcile bounded crawl observations at site scope.
 
@@ -276,7 +277,10 @@ def reconcile_site_audit(
     ``source_html`` or ``browser`` namespaces.  This helper emits a separate
     ``site_reconciliation`` namespace for relationships that cannot be proven
     by inspecting one document: redirect targets/chains, URL convergence,
-    canonical collisions, and representative URL-shape coverage.
+    canonical collisions, and representative URL-shape coverage. Browser
+    samples are only queued URLs; rendered coverage requires a matching
+    ``browser_observations`` entry with ``complete=True``, HTTP 200, no error,
+    and zero resource failures.
     """
 
     normalized_origin = _normalize_origin(origin)
@@ -286,6 +290,35 @@ def reconcile_site_audit(
             normalized = _canonical_link(raw_url, normalized_origin)
             if normalized:
                 sample_urls.add(normalized)
+
+    browser_observed_urls: set[str] = set()
+    browser_failed_urls: set[str] = set()
+    for raw_observation in browser_observations or []:
+        if not isinstance(raw_observation, dict):
+            continue
+        raw_url = raw_observation.get("url")
+        if not isinstance(raw_url, str):
+            continue
+        normalized = _canonical_link(raw_url, normalized_origin)
+        if normalized is None:
+            continue
+        status_code = raw_observation.get("status_code")
+        resource_failures = raw_observation.get("resource_failures")
+        successful = (
+            raw_observation.get("complete") is True
+            and isinstance(status_code, int)
+            and not isinstance(status_code, bool)
+            and status_code == 200
+            and raw_observation.get("error") in (None, "")
+            and isinstance(resource_failures, int)
+            and not isinstance(resource_failures, bool)
+            and resource_failures == 0
+        )
+        if successful:
+            browser_observed_urls.add(normalized)
+        else:
+            browser_failed_urls.add(normalized)
+    browser_failed_urls.difference_update(browser_observed_urls)
 
     observed: list[dict[str, Any]] = []
     redirects: list[dict[str, Any]] = []
@@ -343,7 +376,8 @@ def reconcile_site_audit(
             "page_purpose": _normalized_text(raw_item.get("page_purpose")),
             "canonical": None,
             "source_html_checked": False,
-            "browser_observed": bool(raw_item.get("browser_observed")),
+            "browser_observed": final_url in browser_observed_urls,
+            "browser_failed": final_url in browser_failed_urls,
         }
         raw_signals = raw_item.get("signals")
         if isinstance(raw_signals, dict):
@@ -403,6 +437,8 @@ def reconcile_site_audit(
                 "pages_seen": 0,
                 "source_html_checked": 0,
                 "browser_observed": 0,
+                "browser_observed_urls": [],
+                "browser_failed_urls": [],
             },
         )
         group["pages_seen"] += 1
@@ -410,8 +446,11 @@ def reconcile_site_audit(
             group["sample_urls"].append(final_url)
         if record["source_html_checked"]:
             group["source_html_checked"] += 1
-        if record["browser_observed"]:
+        if record["browser_observed"] and final_url not in group["browser_observed_urls"]:
+            group["browser_observed_urls"].append(final_url)
             group["browser_observed"] += 1
+        if record["browser_failed"] and final_url not in group["browser_failed_urls"]:
+            group["browser_failed_urls"].append(final_url)
 
     duplicate_urls: list[dict[str, Any]] = []
     for target_url, entries in sorted(final_groups.items()):
@@ -448,11 +487,29 @@ def reconcile_site_audit(
         browser_by_template.setdefault(key, []).append(item["final_url"])
     for key, group in template_groups.items():
         queued = sorted(set(browser_by_template.get(key, [])))
+        rendered = sorted(group["browser_observed_urls"])
+        failed = sorted(group["browser_failed_urls"])
+        pending = sorted(set(queued) - set(rendered) - set(failed))
+        sample_failed = sorted(set(queued) & set(failed))
+        browser_complete = bool(rendered) and not failed and not pending
         group["browser_sample_queued"] = bool(queued)
         group["browser_sample_urls"] = queued[:5]
-        group["coverage_status"] = (
-            "source_and_browser" if queued else "source_only"
-        )
+        group["browser_observed_urls"] = rendered
+        group["browser_failed_urls"] = failed
+        group["browser_sample_pending_urls"] = pending
+        group["browser_sample_failed_urls"] = sample_failed
+        group["browser_sample_pending"] = bool(pending)
+        group["browser_complete"] = browser_complete
+        if browser_complete:
+            group["coverage_status"] = "source_and_browser"
+        elif rendered:
+            group["coverage_status"] = "browser_partial"
+        elif failed:
+            group["coverage_status"] = "browser_failed"
+        elif queued:
+            group["coverage_status"] = "browser_pending"
+        else:
+            group["coverage_status"] = "source_only"
 
     findings: list[dict[str, Any]] = []
 
@@ -509,11 +566,20 @@ def reconcile_site_audit(
             "templates": sorted(template_groups.values(), key=lambda item: item["template_key"]),
             "template_count": len(template_groups),
             "browser_sample_urls": sorted(sample_urls),
+            "browser_complete": bool(template_groups) and all(
+                item["browser_complete"] for item in template_groups.values()
+            ),
             "browser_covered_count": sum(
-                1 for item in template_groups.values() if item.get("browser_sample_queued")
+                1 for item in template_groups.values() if item["browser_observed"] > 0
             ),
             "browser_pending_count": sum(
-                1 for item in template_groups.values() if not item.get("browser_sample_queued")
+                1 for item in template_groups.values() if item["browser_sample_pending"]
+            ),
+            "browser_failed_count": sum(
+                1 for item in template_groups.values() if item["browser_failed_urls"]
+            ),
+            "browser_uncovered_count": sum(
+                1 for item in template_groups.values() if item["browser_observed"] == 0
             ),
         },
         "findings": findings,

@@ -806,7 +806,11 @@ def credentials(db, site_id: str, kind: str) -> tuple[dict, dict]:
     row = find_connection(db, site_id, kind)
     if row is None or row.status == "revoked" or not row.encrypted_credentials:
         raise ValueError(f"Connect {kind} in Settings before running this task")
-    return decrypt_credentials(row.encrypted_credentials, settings.ENCRYPTION_KEY), (row.capabilities or {}).get("settings", {})
+    saved = decrypt_credentials(row.encrypted_credentials, settings.ENCRYPTION_KEY)
+    if kind in {'gsc', 'ga4'}:
+        from app.google_config import runtime_credentials
+        saved = runtime_credentials(saved)
+    return saved, (row.capabilities or {}).get("settings", {})
 
 
 def _queue_metric_validation(details: Any) -> tuple[bool, list[str]]:

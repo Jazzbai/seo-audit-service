@@ -8,6 +8,7 @@ secrets.
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -24,6 +25,8 @@ class Settings(BaseSettings):
     # must set an explicit test-only value.
     BOOTSTRAP_TOKEN: str = ""
     ARTIFACT_ROOT: str = "./artifacts"
+    GOOGLE_OAUTH_CLIENT_ID: str = ""
+    GOOGLE_OAUTH_CLIENT_SECRET: str = Field(default="", repr=False)
 
     model_config = SettingsConfigDict(
         env_file=None,

@@ -23,10 +23,12 @@ from test_platform import platform
 pytestmark=pytest.mark.skipif(os.environ.get('FORGE_LIVE_WP')!='1',reason='Explicit isolated WordPress integration opt-in required')
 ROOT=Path(__file__).resolve().parents[1]
 COMPOSE_FILE=ROOT/'deploy/compose.integration.yaml'
+COMPOSE_PROJECT='forgeseo-integration'
+FIXTURE_SERVICES=('wp-db','wp','woo-db','woo')
 
 
 def _compose(*arguments):
-    return ['docker','compose','-f',str(COMPOSE_FILE),*arguments]
+    return ['docker','compose','-p',COMPOSE_PROJECT,'-f',str(COMPOSE_FILE),*arguments]
 
 
 def _run_compose(*arguments):
@@ -36,21 +38,49 @@ def _run_compose(*arguments):
         pytest.fail(f'Isolated WordPress Compose fixture could not be controlled ({type(exc).__name__})')
 
 
+def _project_container_ids():
+    try:
+        result=subprocess.run(
+            ['docker','ps','-a','--no-trunc','-q','--filter',f'label=com.docker.compose.project={COMPOSE_PROJECT}'],
+            cwd=ROOT,capture_output=True,text=True,timeout=30)
+    except (OSError,subprocess.TimeoutExpired) as exc:
+        pytest.fail(f'Isolated WordPress Compose ownership could not be checked ({type(exc).__name__})')
+    if result.returncode:
+        pytest.fail('Isolated WordPress Compose ownership could not be checked')
+    return set(result.stdout.split())
+
+
 @pytest.fixture(scope='module',autouse=True)
 def integration_stack():
-    """Own only the named loopback fixture when the opt-in suite starts it."""
-    running = True
-    for service in ('wp','woo'):
-        status = _run_compose('ps','--status','running','-q',service)
-        if status.returncode != 0 or not status.stdout.strip():
-            running = False
-            break
-    owns_stack = not running
-    if owns_stack:
-        started = _run_compose('up','-d','--remove-orphans')
+    """Reuse a complete fixture; refuse to take over partial Docker projects."""
+    existing_ids=_project_container_ids()
+    service_ids={}
+    running_ids={}
+    for service in FIXTURE_SERVICES:
+        existing=_run_compose('ps','-a','-q',service)
+        running=_run_compose('ps','--status','running','-q',service)
+        if existing.returncode or running.returncode:
+            pytest.fail('Isolated WordPress Compose fixture status could not be checked')
+        service_ids[service]=set(existing.stdout.split())
+        running_ids[service]=set(running.stdout.split())
+    expected_ids=set().union(*service_ids.values())
+    owns_stack=False
+    owned_ids=set()
+    if existing_ids:
+        complete=(existing_ids==expected_ids
+                  and all(len(service_ids[service])==1 and running_ids[service]==service_ids[service]
+                          for service in FIXTURE_SERVICES))
+        if not complete:
+            pytest.fail('An existing isolated Compose project is incomplete; refusing to alter its Docker resources')
+    else:
+        started = _run_compose('up','-d')
         if started.returncode:
             pytest.fail('The isolated WordPress/WooCommerce Compose fixture failed to start')
+        owns_stack=True
+        owned_ids=_project_container_ids()
     try:
+        if owns_stack and len(owned_ids)!=len(FIXTURE_SERVICES):
+            pytest.fail('Started fixture resources did not match the isolated Compose project')
         # The database healthcheck only proves MariaDB is accepting connections;
         # wait until both WordPress containers can load their bootstrap before
         # configure() invokes the fixture installer.
@@ -66,7 +96,12 @@ def integration_stack():
         yield
     finally:
         if owns_stack:
-            _run_compose('down','--remove-orphans')
+            current_ids=_project_container_ids()
+            if current_ids!=owned_ids:
+                pytest.fail('Compose ownership changed during the test; leaving Docker resources untouched')
+            stopped=_run_compose('down')
+            if stopped.returncode:
+                pytest.fail('The isolated WordPress Compose fixture could not be safely stopped')
 
 
 class FixtureTransport(httpx.AsyncBaseTransport):
@@ -93,6 +128,7 @@ class LostResponseTransport(FixtureTransport):
         super().__init__()
         self.operation=operation
         self.dropped=False
+        self.injection_count=0
 
     async def handle_async_request(self,request):
         body=json.loads(await request.aread()) if request.method=='POST' else {}
@@ -101,6 +137,7 @@ class LostResponseTransport(FixtureTransport):
         is_publish=request.method=='POST' and body.get('status')=='publish'
         if not self.dropped and ((self.operation=='create' and is_create) or (self.operation=='publish' and is_publish)) and response.status_code<300:
             self.dropped=True
+            self.injection_count+=1
             await response.aread()
             await response.aclose()
             raise httpx.ReadTimeout('Simulated lost successful fixture response',request=request)
@@ -113,8 +150,8 @@ class FixtureConfig(dict):
 
 
 def configure(service='wp',mode='native',connector=False):
-    command=['docker','compose','-f','deploy/compose.integration.yaml','exec','-T','--user','www-data',service,
-             'php','-d','memory_limit=512M','/fixture/setup.php',mode]
+    command=_compose('exec','-T','--user','www-data',service,
+                     'php','-d','memory_limit=512M','/fixture/setup.php',mode)
     if connector:
         command.append('connector')
     result=subprocess.run(command,cwd=ROOT,capture_output=True,timeout=240)
@@ -212,7 +249,8 @@ async def test_platform_publication_lifecycle_against_real_wordpress(platform,na
     from sqlalchemy import select
     from app import workflows
     from app.config import settings
-    from app.models import Article,Job,Page,Publication,Site
+    from app.models import Article,Connection,Job,Page,Publication,Site
+    from app.operations import credentials
     from app.policies import create_policy
     from app.network import fetch
     client,factory,site_id=platform
@@ -220,27 +258,61 @@ async def test_platform_publication_lifecycle_against_real_wordpress(platform,na
     class ProcessExit(BaseException):
         pass
     interrupted=False
+    external_edit_applied=False
+    transports=[]
     class RecoveryClient(WordPressClient):
         async def create_draft(self,article,operation_key):
-            nonlocal interrupted
+            nonlocal interrupted,external_edit_applied
             created=await super().create_draft(article,operation_key)
             if drop_response=='process_exit_after_create' and not interrupted:
                 interrupted=True
                 raise ProcessExit('Simulated worker exit after remote success, before local id commit')
             if drop_response=='external_title_edit':
                 await self.update(created['resource_key'],{'title':'External editor title must be preserved'},created['source_hash'])
+                external_edit_applied=True
             return created
     async def fixture_client(db,site,kind='wordpress'):
-        return RecoveryClient(native_site['origin'],native_site,transport=LostResponseTransport(drop_response))
+        assert kind=='wordpress'
+        secret,_=credentials(db,site.id,kind)
+        transport=LostResponseTransport(drop_response)
+        transports.append(transport)
+        return RecoveryClient(site.origin,secret,transport=transport)
     async def public_fetch(url):
         return await fetch(url,transport=FixtureTransport())
     monkeypatch.setattr(workflows,'client_for',fixture_client)
     monkeypatch.setattr(workflows,'fetch',public_fetch)
+    saved=client.put(f'/api/v1/sites/{site_id}/connections/wordpress',json={
+        'credentials':{'username':native_site['username'],
+                       'application_password':native_site['application_password']},
+        'settings':{},
+    })
+    assert saved.status_code==200
+
+    def assert_injection_reached():
+        injections=sum(transport.injection_count for transport in transports)
+        expected_injections=1 if drop_response in ('create','publish') else 0
+        assert injections==expected_injections
+        assert interrupted is (drop_response=='process_exit_after_create')
+        assert external_edit_applied is (drop_response=='external_title_edit')
+
     with factory() as db:
         site=db.get(Site,site_id)
         site.origin=native_site['origin']
         site.paused=False
         site.facts={'business_name':'Independent Workshop','services':['Repairs'],'confirmed_sources':[{'url':native_site['origin']+'/about','title':'Fixture business facts'}]}
+        connection_result=await workflows.connection_test(db,site,Job(payload={'kind':'wordpress'}))
+        connection=db.scalar(select(Connection).where(Connection.site_id==site_id,Connection.kind=='wordpress'))
+        author_discovery=connection.capabilities['author_discovery']
+        assert connection.status=='connected'
+        assert connection_result['authenticated'] is True
+        assert connection.capabilities['authenticated_author']['id']==native_site['author_id']
+        assert connection.capabilities['native']['create'] is True
+        assert connection.capabilities['native']['publish'] is True
+        assert author_discovery['complete'] is True
+        assert author_discovery['blockers']==[]
+        assert author_discovery['authenticated_user_id']==native_site['author_id']
+        assert native_site['author_id'] in {item['id'] for item in author_discovery['items']}
+        db.commit()
         create_policy(db,site,None,{'enabled':True,'allowed_actions':['publish'],'author_id':native_site['author_id']})
         article=Article(site_id=site_id,title='Preparing for a workshop repair visit '+uuid4().hex[:8],slug='workflow-'+uuid4().hex,
             body='<p>Independent Workshop provides Repairs.</p>',author_id=native_site['author_id'],
@@ -264,6 +336,7 @@ async def test_platform_publication_lifecycle_against_real_wordpress(platform,na
             assert observed['title']=='External editor title must be preserved'
             assert observed['status']=='draft'
             assert article.status=='review_needed'
+            assert_injection_reached()
             return
         result=await workflows.publish(db,site,job)
         db.commit()
@@ -282,6 +355,7 @@ async def test_platform_publication_lifecycle_against_real_wordpress(platform,na
         db.commit()
         assert restored['status']=='rolled_back'
         assert article.status=='rolled_back'
+        assert_injection_reached()
 
 
 @pytest.mark.asyncio
