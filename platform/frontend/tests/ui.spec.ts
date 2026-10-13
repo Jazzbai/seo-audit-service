@@ -996,11 +996,27 @@ test('run history shows safe live job progress and reconnects without exposing i
   await expect(page.getByRole('heading', { name: 'Run history', exact: true })).toBeVisible()
   await page.evaluate(() => {
     const instances = (window as unknown as { __forgeEventSourceInstances: Array<EventTarget> }).__forgeEventSourceInstances
+    const staleEvent = new MessageEvent('progress', { data: JSON.stringify({
+      id: 98,
+      site_id: 'site-1',
+      kind: 'job_progress',
+      created_at: '2020-01-01T00:00:00Z',
+      data: {
+        site_id: 'site-1', job_id: 'stale-job', job_kind: 'full_cycle',
+        status: 'running', percent: 0,
+      },
+    }) })
+    instances[0]?.dispatchEvent(staleEvent)
+  })
+  await expect(page.locator('.notice').filter({ hasText: 'Live run update' })).toHaveCount(0)
+  await page.evaluate(() => {
+    const instances = (window as unknown as { __forgeEventSourceInstances: Array<EventTarget> }).__forgeEventSourceInstances
     const event = new MessageEvent('progress', { data: JSON.stringify({
       id: 99,
       site_id: 'site-1',
       kind: 'job_progress',
       message: 'provider-token must-not-render raw-provider-response',
+      created_at: new Date().toISOString(),
       data: {
         site_id: 'site-1',
         job_id: 'job-progress-internal-id',

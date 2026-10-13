@@ -190,6 +190,7 @@ function parseProgress(siteId: string, payload: string): JobProgress | null {
 }
 
 const progressEventNames = ['job_progress', 'job-progress', 'progress'] as const
+const MAX_PROGRESS_AGE_MS = 5 * 60 * 1000
 
 /**
  * Subscribe to the authenticated, site-scoped activity stream.
@@ -220,7 +221,11 @@ export function useSiteEventStream(siteId: string, { enabled = true, onEvent, on
     const handleProgress = (event: Event) => {
       const message = event as MessageEvent<string>
       const parsed = parseProgress(siteId, message.data)
-      if (parsed) onProgress?.(parsed)
+      if (!parsed || !parsed.updated_at) return
+      const timestamp = Date.parse(parsed.updated_at)
+      const now = Date.now()
+      if (!Number.isFinite(timestamp) || timestamp < now - MAX_PROGRESS_AGE_MS || timestamp > now + 60_000) return
+      onProgress?.(parsed)
     }
 
     source.onopen = handleOpen

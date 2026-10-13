@@ -445,7 +445,7 @@ function monitoringSignals(overview: Overview): MonitoringSignal[] {
   const browser = overview.browser_coverage
   const browserSignal: MonitoringSignal = !browser || browser.status === 'not_checked'
     ? { label: 'Browser-rendered checks', state: 'empty_results', description: 'No verified recent browser coverage is available. A completed source-HTML crawl does not establish rendered coverage.' }
-    : { label: 'Browser-rendered checks', state: browser.status === 'samples_complete' ? 'automatic' : 'partial_coverage', description: `${browser.complete_samples} of ${browser.sample_count} recent page samples completed; ${browser.partial_samples} partial or failed, ${browser.pending_samples} waiting, ${browser.unverified_samples} unverified.${browser.limited ? ' The returned sample history is limited.' : ''} These are ${browser.window_days}-day samples, not proof that every page or external resource was inspected.` }
+    : { label: 'Browser-rendered checks', state: browser.status === 'samples_complete' ? 'automatic' : 'partial_coverage', description: `${browser.complete_samples} of ${browser.sample_count} recent page samples completed; ${browser.partial_samples} partial or failed, ${browser.pending_samples} waiting, ${browser.unverified_samples} unverified.${browser.limited ? ' The returned sample history is limited.' : ''} These are ${browser.window_days}-day samples, not proof that every page or external resource was inspected. ${browser.message ?? ''}` }
   return [schedulerSignal(overview), wordpressSignal(overview), auditCoverageSignal(overview), browserSignal, candidateQueueSignal(overview), visibilitySignal(overview)]
 }
 

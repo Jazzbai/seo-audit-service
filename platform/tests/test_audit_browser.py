@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.browser import _browser_url_allowed
+from app.browser import _browser_request_policy, _browser_url_allowed
 
 
 @pytest.mark.parametrize(
@@ -22,3 +22,17 @@ from app.browser import _browser_url_allowed
 )
 def test_browser_requests_are_allowlisted_to_the_registered_origin(url, allowed):
     assert _browser_url_allowed(url, "https://example.test") is allowed
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "expected"),
+    [
+        ("GET", "https://example.test/assets/app.js", "same_origin"),
+        ("HEAD", "https://example.test/health", "same_origin"),
+        ("GET", "https://cdn.example.test/app.js", "blocked_external"),
+        ("POST", "https://example.test/api/update", "blocked_non_read"),
+        ("DELETE", "https://cdn.example.test/resource", "blocked_non_read"),
+    ],
+)
+def test_browser_request_policy_reports_safety_blocks_separately(method, url, expected):
+    assert _browser_request_policy(method, url, "https://example.test") == expected

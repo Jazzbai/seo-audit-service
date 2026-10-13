@@ -224,8 +224,19 @@ def browser_coverage_view(db, site_id):
         key = payload.get('page_id') or job.id
         latest.setdefault(str(key), job)
     counts = {'complete_samples': 0, 'partial_samples': 0, 'pending_samples': 0, 'unverified_samples': 0}
+    boundary_samples = 0
+    blocked_external_resources = 0
+    blocked_non_read_requests = 0
     for job in latest.values():
         result = job.result if isinstance(job.result, dict) else {}
+        if result.get('render_policy') == 'same_origin_read_only_v1':
+            boundary_samples += 1
+            external_count = result.get('blocked_external_resources')
+            if type(external_count) is int and external_count >= 0:
+                blocked_external_resources += external_count
+            non_read_count = result.get('blocked_non_read_requests')
+            if type(non_read_count) is int and non_read_count >= 0:
+                blocked_non_read_requests += non_read_count
         if (job.status == 'complete' and result.get('complete') is True
                 and type(result.get('status_code')) is int and result['status_code'] == 200
                 and type(result.get('resource_failures')) is int and result['resource_failures'] == 0):
@@ -238,10 +249,18 @@ def browser_coverage_view(db, site_id):
             counts['unverified_samples'] += 1
     status = ('not_checked' if not latest else 'partial' if counts['partial_samples'] else
               'pending' if counts['pending_samples'] else 'needs_review' if counts['unverified_samples'] or limited else 'samples_complete')
+    boundary_message = (
+        f"The safe renderer fetched same-origin GET/HEAD resources only; across {boundary_samples} current samples it blocked {blocked_external_resources} off-site resources and {blocked_non_read_requests} non-read requests."
+        if boundary_samples else
+        'The safe renderer fetches same-origin GET/HEAD resources only; off-site resources are withheld. Older samples do not record blocked-resource counts.'
+    )
     return {'status': status, 'scope': 'latest_per_page_in_recent_200_jobs',
             'window_days': 7, 'sample_count': len(latest), 'limited': limited, **counts,
+            'safe_boundary_samples': boundary_samples,
+            'blocked_external_resources': blocked_external_resources if boundary_samples else None,
+            'blocked_non_read_requests': blocked_non_read_requests if boundary_samples else None,
             'last_check_at': iso(recent[0].updated_at) if recent else None,
-            'message': 'Recent browser samples are separate from source-HTML crawl coverage and do not establish that every page or external resource was inspected.'}
+            'message': f'Recent browser samples are separate from source-HTML crawl coverage and do not establish that every page or external resource was inspected. {boundary_message}'}
 
 
 def candidate_for_site(db, candidate_id: str, site_id: str):
@@ -1455,12 +1474,23 @@ def _sse_payload(row: Event) -> dict[str, Any]:
 @router.get('/sites/{site_id}/events')
 async def events(site_id: str, request: Request, ctx=Depends(require_user), db=Depends(get_db)):
     guard(db, ctx, site_id)
+    last_event_id = request.headers.get('last-event-id')
+    is_new_stream = last_event_id is None
     try:
-        cursor = max(0, int(request.headers.get('last-event-id', '0')))
+        # A new EventSource has no cursor. The Activity/Jobs pages already load
+        # current history separately, so start live delivery at the current
+        # site tail instead of replaying every historical progress event.
+        cursor = (max(0, int(last_event_id)) if last_event_id is not None else
+                  db.scalar(select(func.max(Event.id)).where(Event.site_id == site_id)) or 0)
     except ValueError:
         raise HTTPException(422, 'Invalid event cursor')
     async def stream():
         nonlocal cursor
+        if is_new_stream:
+            # Give EventSource a cursor even when no activity arrives during
+            # this connection, so its automatic reconnect cannot restart at
+            # the site's then-current tail and skip intervening events.
+            yield f'id: {cursor}\nevent: stream_ready\ndata: {{}}\n\n'
         for _ in range(30):
             if await request.is_disconnected():
                 return

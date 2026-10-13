@@ -49,6 +49,15 @@ def _browser_url_allowed(url, origin):
         return False
 
 
+def _browser_request_policy(method, url, origin):
+    """Classify requests without permitting off-origin browser fetches."""
+    if not isinstance(method, str) or method.upper() not in ('GET', 'HEAD'):
+        return 'blocked_non_read'
+    if not _browser_url_allowed(url, origin):
+        return 'blocked_external'
+    return 'same_origin'
+
+
 async def inspect_page(db,site,job):
     from playwright.async_api import async_playwright
     from app.intelligence.audit import audit_page
@@ -57,21 +66,26 @@ async def inspect_page(db,site,job):
     if not _browser_url_allowed(page.url, site.origin):
         raise ValueError('Rendered checks are limited to this site')
     failures = []
+    blocked = {'external_resources': 0, 'non_read_requests': 0}
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True,args=['--disable-dev-shm-usage'])
         context = await browser.new_context(service_workers='block',viewport={'width':1440,'height':1000},accept_downloads=False)
         async with httpx.AsyncClient(transport=PublicTransport(site.origin),timeout=15,trust_env=False,follow_redirects=False) as client:
             async def route_request(route):
                 request = route.request
-                if request.method not in ('GET','HEAD'):
+                policy = _browser_request_policy(request.method, request.url, site.origin)
+                if policy == 'blocked_non_read':
+                    blocked['non_read_requests'] += 1
                     await route.abort()
                     return
-                if not _browser_url_allowed(request.url, site.origin):
-                    failures.append(request.resource_type or 'unknown')
+                if policy == 'blocked_external':
+                    blocked['external_resources'] += 1
                     await route.abort()
                     return
                 try:
                     async with client.stream(request.method,request.url) as response:
+                        if response.status_code >= 400:
+                            failures.append(request.resource_type or 'unknown')
                         body = bytearray()
                         async for part in response.aiter_bytes():
                             body.extend(part)
@@ -93,7 +107,13 @@ async def inspect_page(db,site,job):
                 html = await tab.content()
                 observation = audit_page(page.url,html,page.source)
                 observed = iso(now())
-                observation['signals'].update({'observation_type':'browser_rendered','observed_at':observed,'resource_failures':len(failures)})
+                observation['signals'].update({
+                    'observation_type':'browser_rendered', 'observed_at':observed,
+                    'render_policy':'same_origin_read_only_v1',
+                    'resource_failures':len(failures),
+                    'blocked_external_resources':blocked['external_resources'],
+                    'blocked_non_read_requests':blocked['non_read_requests'],
+                })
                 evidence = capture_html(site,job,page.url,html,'browser_rendered')
                 evidence['observation_type'] = 'browser_rendered'
                 observation['signals']['evidence'] = evidence
@@ -112,7 +132,10 @@ async def inspect_page(db,site,job):
                 artifact.write_bytes(screenshot)
                 data = {'page_id':page.id,'url':page.url,'status_code':response.status if response else None,
                         'measurement_type':'lab_navigation_not_core_web_vitals','timing':timing,'script_errors':errors[:20],
-                        'resource_failures':len(failures),'screenshot_sha256':hashlib.sha256(screenshot).hexdigest(),
+                        'render_policy':'same_origin_read_only_v1','resource_failures':len(failures),
+                        'blocked_external_resources':blocked['external_resources'],
+                        'blocked_non_read_requests':blocked['non_read_requests'],
+                        'screenshot_sha256':hashlib.sha256(screenshot).hexdigest(),
                         'artifact':str(artifact.relative_to(Path(settings.ARTIFACT_ROOT))),
                         **_chromium_navigation_provenance()}
                 db.add(Measurement(site_id=site.id,kind='browser',source='chromium_lab',data=data,observed_at=now()))

@@ -54,10 +54,11 @@ def _insert_events(factory, site_id, rows):
         return before, [row.id for row in persisted]
 
 
-def _stream(client, site_id, cursor=0):
+def _stream(client, site_id, cursor=None):
+    headers = {} if cursor is None else {'Last-Event-ID': str(cursor)}
     return _read_sse(client.get(
         f'/api/v1/sites/{site_id}/events',
-        headers={'Last-Event-ID': str(cursor)},
+        headers=headers,
     ))
 
 
@@ -105,6 +106,26 @@ def test_sse_last_event_id_replays_activity_and_progress_in_global_order(sse_pla
     assert [record['id'] for record in first] == ids
     assert [record['id'] for record in replay] == ids[1:]
     assert [record['event'] for record in replay] == ['progress', 'activity']
+
+
+def test_new_sse_stream_starts_at_site_tail_instead_of_replaying_history(sse_platform):
+    client, factory, site_id = sse_platform
+    _before, ids = _insert_events(factory, site_id, [
+        ('job_progress', 'Old running update', {
+            'site_id': site_id, 'job_id': 'old-job', 'job_kind': 'audit',
+            'status': 'running', 'phase': 'worker_start', 'percent': 0,
+        }),
+        ('job_progress', 'Old completed update', {
+            'site_id': site_id, 'job_id': 'old-job', 'job_kind': 'audit',
+            'status': 'complete', 'phase': 'worker_finish', 'percent': 100,
+        }),
+    ])
+
+    records = _stream(client, site_id)
+
+    assert len(records) == 1
+    assert records[0]['event'] == 'stream_ready'
+    assert records[0]['id'] == ids[-1]
 
 
 def test_sse_progress_is_site_scoped(sse_platform):

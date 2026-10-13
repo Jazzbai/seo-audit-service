@@ -140,6 +140,23 @@ def test_reconciliation_counts_only_complete_browser_observations_as_coverage():
     assert template["coverage_status"] == "source_and_browser"
 
 
+def test_blocked_external_resources_do_not_fail_safe_same_origin_render_coverage():
+    url = "https://example.test/services/brakes"
+    result = reconcile_site_audit(
+        [{"url": url, "status_code": 200, "error": None,
+          "resource_type": "pages", "signals": {"source": "source_html"}}],
+        "https://example.test",
+        browser_sample_urls=[url],
+        browser_observations=[{
+            "url": url, "status_code": 200, "error": None,
+            "resource_failures": 0, "blocked_external_resources": 13,
+            "render_policy": "same_origin_read_only_v1", "complete": True,
+        }],
+    )
+    assert result["template_coverage"]["browser_covered_count"] == 1
+    assert result["template_coverage"]["browser_failed_count"] == 0
+
+
 def test_reconciliation_without_browser_sample_remains_source_only():
     result = reconcile_site_audit(
         [{

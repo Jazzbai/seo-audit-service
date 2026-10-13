@@ -65,3 +65,21 @@ def test_queued_render_is_pending_not_covered(platform):
     assert view['status'] == 'pending'
     assert view['complete_samples'] == 0
     assert view['pending_samples'] == 1
+
+
+def test_safe_bounded_render_counts_blocked_external_resources_without_marking_partial(platform):
+    client, factory, site_id = platform
+    with factory() as db:
+        add_browser(db, site_id, 'one', result={
+            'complete': True, 'status_code': 200, 'resource_failures': 0,
+            'render_policy': 'same_origin_read_only_v1',
+            'blocked_external_resources': 11, 'blocked_non_read_requests': 2,
+        })
+        db.commit()
+    view = client.get(f'/api/v1/sites/{site_id}/overview').json()['browser_coverage']
+    assert view['status'] == 'samples_complete'
+    assert view['complete_samples'] == 1
+    assert view['safe_boundary_samples'] == 1
+    assert view['blocked_external_resources'] == 11
+    assert view['blocked_non_read_requests'] == 2
+    assert 'same-origin GET/HEAD' in view['message']

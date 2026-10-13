@@ -11,6 +11,23 @@ import { ResourceStateView, useResource, useSiteId } from './shared'
 
 const SAFE_ACTIVITY_STATUSES = new Set(['queued', 'running', 'complete', 'partial', 'failed', 'blocked', 'cancelled', 'retrying', 'needs_connection', 'needs_review'])
 const SAFE_ACTIVITY_STAGES = new Set(['availability', 'inventory', 'public_audit', 'content_plan', 'refresh_evaluation', 'audit', 'plan', 'generate', 'publish', 'visibility', 'refresh'])
+const JOB_PROGRESS_STATUSES: Record<string, JobProgress['status']> = {
+  queued: 'queued', retry: 'retrying', running: 'running', complete: 'complete',
+  partial: 'partial', failed: 'failed', blocked: 'blocked', cancelled: 'cancelled',
+  needs_connection: 'needs_connection', needs_review: 'needs_review',
+}
+
+function reconcileLiveProgress(progress: JobProgress | null, jobs: Job[] | undefined) {
+  if (!progress || !jobs) return progress
+  const job = jobs.find((item) => String(item.id) === String(progress.job_id))
+  if (!job) return progress
+  const status = JOB_PROGRESS_STATUSES[job.status]
+  if (!status) return progress
+  const persistedAt = job.updated_at ? Date.parse(job.updated_at) : Number.NaN
+  const progressAt = progress.updated_at ? Date.parse(progress.updated_at) : Number.NaN
+  if (Number.isFinite(progressAt) && Number.isFinite(persistedAt) && progressAt > persistedAt) return progress
+  return { ...progress, status, updated_at: job.updated_at ?? progress.updated_at }
+}
 
 function activityDetails(event: EventRecord) {
   if (!event.data) return '—'
@@ -60,6 +77,7 @@ export function JobsPage() {
   const [cancelError, setCancelError] = useState<string | null>(null)
   const onProgress = useCallback((progress: JobProgress) => setLiveProgress(progress), [])
   const stream = useSiteEventStream(siteId, { enabled: resource.data !== null, onProgress })
+  const displayedProgress = reconcileLiveProgress(liveProgress, resource.data?.items)
   useEffect(() => { setLiveProgress(null) }, [siteId])
   useEffect(() => { setCancelMessage(null); setCancelError(null); setCancelling(null) }, [siteId])
   async function cancelWaitingJob(job: Job) {
@@ -78,7 +96,7 @@ export function JobsPage() {
     {cancelMessage && <div className="mb-20"><Notice kind="success">{cancelMessage}</Notice></div>}
     {cancelError && <div className="mb-20"><Notice kind="error">{cancelError}</Notice></div>}
     {resource.loading && !resource.data ? <LoadingState label="Loading recent jobs" /> : resource.error && !resource.data ? <ErrorState message={resource.error} onRetry={() => void resource.reload()} /> : !resource.data ? <ErrorState message="No jobs response was returned." onRetry={() => void resource.reload()} /> : <>
-      <JobProgressBanner progress={liveProgress} streamStatus={stream.status} />
+      <JobProgressBanner progress={displayedProgress} streamStatus={stream.status} />
       {resource.stale && <StaleState onRefresh={() => void resource.reload()} />}
       {resource.error && <div className="mt-20"><ErrorState message={resource.error} onRetry={() => void resource.reload()} /></div>}
       <Panel padded={false}>
