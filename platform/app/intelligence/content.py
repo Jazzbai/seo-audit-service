@@ -886,6 +886,7 @@ def plan_topics(
                 "title": f"About {business_name}",
                 "topic": business_name,
                 "purpose": "new_topic",
+                "automation_review_required": True,
                 "evidence": [{"kind": "supplied_fact", "path": "business_name", "value": business_name}],
                 "keywords": [],
                 "products": [],
@@ -970,6 +971,8 @@ def plan_topics(
         }
         if research_evidence:
             brief["research_evidence"] = research_evidence
+        if candidate.get("automation_review_required"):
+            brief["automation_review_required"] = True
         if planning_source_summary:
             # Planning provenance is not an article claim or a request to
             # mention a competitor in published copy.

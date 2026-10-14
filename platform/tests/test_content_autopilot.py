@@ -250,6 +250,44 @@ def test_content_autopilot_prefers_configured_verified_author(platform, monkeypa
         assert db.get(Article, article_id).author_id == "2"
 
 
+def test_content_autopilot_skips_test_and_brand_fallback_drafts(platform, monkeypatch):
+    client, factory, site_id = platform
+    _ready_site(client, factory, site_id)
+    test_id = _add_planned_article(factory, site_id, title="QA TEST ONLY - estimate checklist")
+    brand_id = _add_planned_article(factory, site_id, title="About Independent test")
+    article_id = _add_planned_article(factory, site_id, title="What to photograph before a repair estimate")
+    _ready_credentials(monkeypatch)
+    calls = []
+    _patch_successful_content_steps(monkeypatch, calls)
+    monkeypatch.setattr(settings, "GLOBAL_PAUSE", False)
+
+    _, result = _job_result(client, site_id, key="content-autopilot-qualified-topic")
+
+    assert result["status"] == "published"
+    assert result["article_id"] == article_id
+    assert calls == ["generate", "publish"]
+    with factory() as db:
+        assert db.get(Article, test_id).status == "planned"
+        assert db.get(Article, brand_id).status == "planned"
+
+
+def test_content_autopilot_explicit_brand_draft_gates_before_paid_generation(platform, monkeypatch):
+    client, factory, site_id = platform
+    _ready_site(client, factory, site_id)
+    article_id = _add_planned_article(factory, site_id, title="About Independent test")
+    _ready_credentials(monkeypatch)
+    calls = []
+    _patch_successful_content_steps(monkeypatch, calls)
+    monkeypatch.setattr(settings, "GLOBAL_PAUSE", False)
+
+    _, result = _job_result(client, site_id, payload={"article_id": article_id},
+                            key="content-autopilot-explicit-brand")
+
+    assert result["status"] == "gated"
+    assert "topic_requires_editorial_review" in result["blockers"]
+    assert calls == []
+
+
 def test_content_autopilot_generation_review_stops_before_publication(platform, monkeypatch):
     client, factory, site_id = platform
     _ready_site(client, factory, site_id)

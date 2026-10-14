@@ -1867,6 +1867,20 @@ def _content_autopilot_base(job, preflight, *, status: str, stages: list[dict[st
     }
 
 
+def _content_autopilot_topic_blockers(site, article):
+    """Keep test drafts and brand-only fallback briefs out of unattended work."""
+    title = re.sub(r'\s+', ' ', article.title or '').strip().casefold()
+    brief = article.brief if isinstance(article.brief, dict) else {}
+    facts = site.facts if isinstance(site.facts, dict) else {}
+    business_name = facts.get('business_name')
+    business = re.sub(r'\s+', ' ', business_name).strip().casefold() if isinstance(business_name, str) else ''
+    if title.startswith(('qa test only', 'test only')):
+        return ['test_article_not_eligible']
+    if brief.get('automation_review_required') is True or (business and title == f'about {business}'):
+        return ['topic_requires_editorial_review']
+    return []
+
+
 async def content_autopilot(db, site, job):
     """Run one policy-governed article from plan through verified publication.
 
@@ -1969,14 +1983,19 @@ async def content_autopilot(db, site, job):
         ))
         blockers = [] if article is not None else ['article_not_found_or_cross_site']
     else:
-        article = db.scalars(select(Article).where(
+        planned_articles = db.scalars(select(Article).where(
             Article.site_id == site.id,
             Article.status == 'planned',
             Article.managed.is_(True),
-        ).order_by(Article.created_at, Article.id).limit(1)).first()
+        ).order_by(Article.created_at, Article.id))
+        article = next((candidate for candidate in planned_articles
+                        if not _content_autopilot_topic_blockers(site, candidate)
+                        and not (isinstance(candidate.brief, dict)
+                                 and candidate.brief.get('purpose') == 'refresh_existing')), None)
         blockers = []
 
     if article is not None:
+        blockers.extend(_content_autopilot_topic_blockers(site, article))
         if article.status != 'planned':
             blockers.append('article_not_planned')
         if article.managed is not True:
@@ -2047,12 +2066,16 @@ async def content_autopilot(db, site, job):
                 return _content_autopilot_finish(db, site, job, result)
         planned_ids = planned_ids if isinstance(planned_ids, list) else []
         planned_ids = [value for value in planned_ids if isinstance(value, str)]
-        article = db.scalar(select(Article).where(
+        planned_articles = db.scalars(select(Article).where(
             Article.site_id == site.id,
             Article.id.in_(planned_ids),
             Article.status == 'planned',
             Article.managed.is_(True),
-        ).order_by(Article.created_at, Article.id).limit(1)) if planned_ids else None
+        ).order_by(Article.created_at, Article.id)) if planned_ids else ()
+        article = next((candidate for candidate in planned_articles
+                        if not _content_autopilot_topic_blockers(site, candidate)
+                        and not (isinstance(candidate.brief, dict)
+                                 and candidate.brief.get('purpose') == 'refresh_existing')), None)
         planning_stage = _content_autopilot_safe_stage(
             'plan',
             'planned' if article is not None else 'needs_review',
