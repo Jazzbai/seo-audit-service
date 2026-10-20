@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 from app import api, auth, oauth
 from app.config import settings
 from app.connectors.security import decrypt_credentials, encrypt_credentials
-from app.models import Base, Connection, Site, Team
+from app.models import Base, Connection, Job, Site, Team
 
 
 BOOTSTRAP_TOKEN = "oauth-test-bootstrap-token"
@@ -49,6 +49,8 @@ def oauth_api(monkeypatch) -> Iterator[tuple[TestClient, sessionmaker]]:
     monkeypatch.setattr(settings, "COOKIE_SECURE", False)
     monkeypatch.setattr(settings, "ENCRYPTION_KEY", MASTER_KEY)
     monkeypatch.setattr(settings, "BOOTSTRAP_TOKEN", BOOTSTRAP_TOKEN)
+    from app import worker
+    monkeypatch.setattr(worker.execute_job, "apply_async", lambda *args, **kwargs: None)
 
     with TestClient(application) as client:
         bootstrap = client.post(
@@ -275,7 +277,13 @@ def test_callback_exchanges_and_persists_only_a_successful_provider_response(oau
     with factory() as db:
         row = db.scalar(select(Connection).where(Connection.site_id == site_id, Connection.kind == "gsc"))
         saved = decrypt_credentials(row.encrypted_credentials, MASTER_KEY)
-        assert row.status == "connected"
+        assert row.status == "needs_test"
+        assert row.checked_at is None
+        assert row.capabilities['last_connection_test']['status'] == 'pending'
+        job = db.scalar(select(Job).where(Job.site_id == site_id, Job.kind == 'connection_test'))
+        assert job is not None and job.status == 'queued'
+        assert job.payload == {'kind': 'gsc'}
+        assert parse_qs(urlparse(response.headers['location']).query)['verification_job'] == [job.id]
         assert saved["client_id"] == "client-id"
         assert saved["client_secret"] == "client-secret"
         assert saved["access_token"] == "access-secret"
@@ -313,6 +321,36 @@ def test_callback_rejects_replaying_a_successfully_consumed_state(oauth_api, mon
     assert replay.status_code == 400
     assert replay.json()["detail"] == "OAuth state has already been used or is no longer valid"
     assert calls == ["one-time-code"]
+
+
+@pytest.mark.parametrize('previous_status', ['error', 'verified'])
+def test_reauthorization_replaces_stale_result_with_durable_read_only_check(oauth_api, monkeypatch, previous_status):
+    client, factory = oauth_api
+    site_id = _site(factory)
+    _connection(factory, site_id, status='connected')
+    with factory() as db:
+        row = db.scalar(select(Connection).where(Connection.site_id == site_id))
+        row.capabilities = {'settings': {'site_url': 'sc-domain:oauth.example'},
+                            'authenticated': True,
+                            'last_connection_test': {'status': previous_status, 'error_code': 'old_error'}}
+        db.commit()
+    state = _state_from(_start(client, site_id))
+
+    async def exchange(*args, **kwargs):
+        return {'access_token': 'new-private-grant', 'expires_in': 3600}
+
+    monkeypatch.setattr(oauth, 'exchange_google_code', exchange)
+    response = client.get(f'/api/v1/oauth/google/callback?state={state}&code=code', follow_redirects=False)
+    assert response.status_code == 303
+    with factory() as db:
+        row = db.scalar(select(Connection).where(Connection.site_id == site_id))
+        assert row.status == 'needs_test'
+        assert row.capabilities['authenticated'] is False
+        assert row.capabilities['last_connection_test'] == {'status': 'pending', 'kind': 'gsc', 'read_only': True}
+        assert row.capabilities['settings'] == {'site_url': 'sc-domain:oauth.example'}
+        jobs = db.scalars(select(Job).where(Job.site_id == site_id)).all()
+        assert len(jobs) == 1 and jobs[0].payload == {'kind': 'gsc'}
+    assert 'new-private-grant' not in response.headers['location']
 
 
 def test_callback_consumes_state_when_google_denies_authorization(oauth_api):

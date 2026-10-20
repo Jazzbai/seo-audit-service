@@ -29,7 +29,7 @@ from app.connectors.security import decrypt_credentials, encrypt_credentials
 from app.db import get_db
 from app.models import Connection, Site, utcnow
 from app.network import PublicTransport
-from app.operations import event, find_connection
+from app.operations import enqueue, event, find_connection
 
 
 router = APIRouter(prefix="/api/v1")
@@ -429,7 +429,7 @@ def _persist_token(
     token_payload: dict[str, Any],
     kind: str,
     expected_client_id: str,
-) -> None:
+) -> str:
     # Only validated provider tokens are copied. Platform credentials stay in
     # runtime configuration; a site's grant is bound to its issuing client.
     expected_ciphertext = row.encrypted_credentials
@@ -475,10 +475,21 @@ def _persist_token(
             status_code=503,
             detail="The Google token could not be stored securely",
         ) from exc
-    row.status = "connected"
-    row.checked_at = utcnow()
+    # A new grant invalidates the previous property's access result. Do not
+    # retain an old failure (or success) against newly authorized credentials.
+    row.status = "needs_test"
+    row.checked_at = None
+    row.capabilities = {
+        **(row.capabilities or {}),
+        "authenticated": False,
+        "last_connection_test": {"status": "pending", "kind": kind, "read_only": True},
+    }
     event(db, site, "oauth_connected", f"{kind} Google OAuth connected", {"kind": kind})
-    db.commit()
+    # Enqueue commits the grant and durable read-only check together. Broker
+    # downtime does not lose the verification; the scheduler can dispatch it.
+    job = enqueue(db, site, "connection_test", {"kind": kind},
+                  f"oauth-verify:{kind}:{hashlib.sha256(row.encrypted_credentials.encode()).hexdigest()}")
+    return job.id
 
 
 async def _callback(
@@ -543,8 +554,10 @@ async def _callback(
         if GOOGLE_SCOPES[kind] not in granted or not granted <= allowed:
             return _redirect_result(site.id, kind=kind, result='error', reason='unexpected_permissions')
 
-    _persist_token(db, site, locked_row, existing, token_payload, kind, client_id)
-    return _redirect_result(site.id, kind=kind, result="connected")
+    job_id = _persist_token(db, site, locked_row, existing, token_payload, kind, client_id)
+    response = _redirect_result(site.id, kind=kind, result="connected")
+    response.headers["location"] += "&" + urlencode({"verification_job": job_id})
+    return response
 
 
 @router.get("/sites/{site_id}/connections/{kind}/oauth/start")

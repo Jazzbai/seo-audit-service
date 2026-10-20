@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Eye, EyeOff, History, KeyRound, LockKeyhole, PlugZap, Save, ShieldCheck, Trash2, UserPlus, Users, Zap } from 'lucide-react'
 import { Badge, Button, EmptyState, ErrorState, Field, Notice, PageHeader, Panel } from '../components/ui'
@@ -94,6 +94,9 @@ function connectionReadiness(connection?: Connection): { state: Exclude<Capabili
   }
   if (status === 'unsupported') {
     return { state: 'unsupported', description: 'This source is not supported for this site.' }
+  }
+  if (['gsc', 'ga4'].includes(connection.kind) && testStatus === 'pending') {
+    return { state: 'needs review', description: 'Google authorization saved. Checking read-only access to the saved property automatically. No need to click Test.' }
   }
   if (DEGRADED_CONNECTION_STATUSES.includes(status) || DEGRADED_CONNECTION_STATUSES.includes(testStatus)) {
     return { state: 'degraded', description: 'The last provider check failed. Review the connection and run Test again before relying on it.' }
@@ -330,7 +333,10 @@ function googleCapabilitySummary(definition: ConnectionDefinition, connection?: 
   const testStatus = typeof test.status === 'string' ? test.status.toLowerCase() : ''
   let state: CapabilitySummaryItem['state'] = 'needs connection'
   let description = 'Connect this site with Google before ForgeSEO can read this source.'
-  if (['needs_connection', 'revoked', 'disconnected', ''].includes(status ?? '')) {
+  if (testStatus === 'pending' && status === 'needs_test') {
+    state = 'needs review'
+    description = 'Google authorization is complete. Property access verification is queued or running automatically.'
+  } else if (['needs_connection', 'revoked', 'disconnected', ''].includes(status ?? '')) {
     state = 'needs connection'
   } else if (status === 'connected' && testStatus === 'verified') {
     state = 'automatic'
@@ -372,6 +378,8 @@ export function ConnectionsPage() {
   const loader = useCallback(() => connectionsApi.list(siteId), [siteId])
   const resource = useResource(loader, [siteId])
   const location = useLocation()
+  const reloadConnections = useRef(resource.reload)
+  reloadConnections.current = resource.reload
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
@@ -382,8 +390,28 @@ export function ConnectionsPage() {
     if (!provider || !['connected', 'error'].includes(result ?? '')) return
     if (result === 'connected') {
       setError(null)
-      setMessage(`${provider} is connected. Run a connection test before collecting measurements.`)
-      return
+      const jobId = params.get('verification_job')
+      if (!jobId) {
+        setMessage(`${provider}: Google authorization saved. Click Test on its card to verify access to the saved property.`)
+        return
+      }
+      let active = true
+      setMessage(`${provider}: Google authorization saved. Verifying property access automatically…`)
+      void jobsApi.wait(siteId, jobId, { timeoutMs: 60_000 }).then(async (job) => {
+        if (!active) return
+        if (job.status === 'complete' && job.result?.status === 'verified') {
+          setMessage(`${provider}: access verified. Automatic data collection is ready; no further action is needed.`)
+        } else if (['queued', 'running', 'retry'].includes(job.status)) {
+          setMessage(`${provider}: access verification is still queued or running. Refresh to check progress; do not reconnect again.`)
+        } else {
+          setMessage(null)
+          setError(`${provider}: Google authorization was saved, but property access could not be verified. Check the saved property and account permissions, then click Test to retry.`)
+        }
+        await reloadConnections.current()
+      }).catch((requestError) => {
+        if (active) { setMessage(null); setError(detailMessage(requestError)) }
+      })
+      return () => { active = false }
     }
     const reason = params.get('reason')
     const explanation = reason === 'authorization_denied'
@@ -393,9 +421,9 @@ export function ConnectionsPage() {
         : 'Google authorization could not be completed.'
     setMessage(null)
     setError(`${provider}: ${explanation}`)
-  }, [location.search])
+  }, [location.search, siteId])
   return <ResourceStateView resource={resource} empty={<ErrorState message="No connections response was returned." onRetry={() => void resource.reload()} />}>
-    {(data) => <><div className="panel-header" style={{ marginBottom: 18 }}><div><h2 className="panel-title">Connected sources</h2><p className="panel-subtitle">Secrets are encrypted by the API. Blank secret fields keep an existing secret unchanged.</p></div><Badge value={`${data.total} configured`} /></div>{!canEdit && <div className="mb-20"><Notice kind="warning" title="Read-only for your role">Only the owner can change connection credentials or submit connection tests. The API remains the authority.</Notice></div>}{message && <div className="mb-20"><Notice kind="success">{message}</Notice></div>}{error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}<div className="connection-grid">{CONNECTIONS.map((definition) => {
+    {(data) => <><div className="panel-header" style={{ marginBottom: 18 }}><div><h2 className="panel-title">Connected sources</h2><p className="panel-subtitle">Secrets are encrypted by the API. Blank secret fields keep an existing secret unchanged.</p></div><Badge value={`${data.total} configured`} /></div>{!canEdit && <div className="mb-20"><Notice kind="warning" title="Read-only for your role">Only the owner can change connection credentials or submit connection tests. The API remains the authority.</Notice></div>}{message && <div className="mb-20"><Notice kind={message.includes('authorization saved') || message.includes('verification is still') ? 'info' : 'success'}>{message}</Notice></div>}{error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}<div className="connection-grid">{CONNECTIONS.map((definition) => {
       const connection = data.items.find((item) => item.kind === definition.kind)
       const key = `${siteId}:${definition.kind}`
       return definition.kind === 'microsoft_graph'
@@ -473,8 +501,16 @@ function ConnectionCard({ definition, connection, siteId, canEdit, onChanged, on
     try {
       const job = await connectionsApi.test(siteId, definition.kind)
       const finished = await jobsApi.wait(siteId, job.id, { onUpdate: (next) => setTestResult(`${definition.name} test is ${next.status}.`) })
-      setTestResult(`${definition.name} test is ${finished.status}.`)
-      await onChanged(`${definition.name} test finished with status ${finished.status}.`)
+      const google = definition.kind === 'gsc' || definition.kind === 'ga4'
+      const verified = finished.status === 'complete' && finished.result?.status === 'verified'
+      const resultMessage = google
+        ? verified
+          ? `${definition.name}: access verified. Automatic data collection is ready; no further action is needed.`
+          : `${definition.name}: access was not verified (${finished.status}). Review the connection and saved property before retrying.`
+        : `${definition.name} test is ${finished.status}.`
+      setTestResult(resultMessage)
+      await onChanged(google && !verified ? '' : resultMessage)
+      if (google && !verified) onError(resultMessage)
     }
     catch (requestError) { onError(detailMessage(requestError)) }
     finally { setWorking(false) }
