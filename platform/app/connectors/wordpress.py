@@ -1,9 +1,9 @@
 """A conservative async client for the WordPress REST API.
 
 The client uses native ``wp/v2`` resources for ordinary content operations.
-SEO writes are only enabled for an explicitly discovered ForgeSEO namespaced
-route; the presence of Yoast or Rank Math metadata is read-only evidence, not
-permission to write arbitrary plugin fields.
+SEO writes require an explicitly discovered ForgeSEO route or the verified
+Auto1 Ops validation/apply contract; plugin metadata alone never authorizes
+arbitrary field writes.
 """
 
 from __future__ import annotations
@@ -113,6 +113,10 @@ _SEO_PROVIDERS = {
     "rank_math": {"rankmath/v1", "rankmath/v1/", "rank_math/v1", "rank_math/v1/"},
 }
 _SEO_READ_KEYS = {
+    "auto1_ops": {
+        "title": "auto1_seo_title",
+        "description": "auto1_meta_description",
+    },
     "yoast": {
         "title": "_yoast_wpseo_title",
         "description": "_yoast_wpseo_metadesc",
@@ -345,6 +349,7 @@ class WordPressClient(AsyncConnector):
         self._forgeseo_seo_methods: set[str] = set()
         self._forgeseo_seo_route: str | None = None
         self._forgeseo_operation_route: str | None = None
+        self._auto1_seo_write = False
 
     def _wp_path(self, path: str = "") -> str:
         if not path:
@@ -871,6 +876,56 @@ class WordPressClient(AsyncConnector):
         }
         return detected
 
+    async def _discover_auto1_seo(self, namespaces: set[str]) -> dict[str, Any] | None:
+        """Recognize the existing Auto1 bridge, without general meta passthrough."""
+        if 'auto1-ops/v1' not in namespaces:
+            return None
+        required = {
+            '/auto1-ops/v1/capabilities': 'GET',
+            '/auto1-ops/v1/seo/(?P<post_id>\\d+)': 'GET',
+            '/auto1-ops/v1/seo/(?P<post_id>\\d+)/validate': 'POST',
+            '/auto1-ops/v1/seo/(?P<post_id>\\d+)/apply': 'POST',
+            '/auto1-ops/v1/seo/(?P<post_id>\\d+)/rollback': 'POST',
+        }
+        result = {'detected': True, 'read': False, 'write': False, 'writable_fields': []}
+        if not all(self._supports(route, method) for route, method in required.items()):
+            return result
+        try:
+            value, _ = await self._json_request('GET', self._wp_path('auto1-ops/v1/capabilities'))
+        except ConnectorError as exc:
+            if exc.status_code in {401, 403, 404}:
+                return result
+            raise
+        if not isinstance(value, Mapping) or value.get('namespace') != 'auto1-ops/v1':
+            return result
+        writable = value.get('writable', {})
+        modules = value.get('modules', {})
+        endpoints = value.get('endpoints', {})
+        if not all(isinstance(item, Mapping) for item in (writable, modules, endpoints)):
+            return result
+        seo = modules.get('seo', {})
+        if not isinstance(seo, Mapping):
+            return result
+        contracts = {
+            'seo_read': ('GET', '/wp-json/auto1-ops/v1/seo/<postId>'),
+            'seo_validate': ('POST', '/wp-json/auto1-ops/v1/seo/<postId>/validate'),
+            'seo_apply': ('POST', '/wp-json/auto1-ops/v1/seo/<postId>/apply'),
+            'seo_rollback': ('POST', '/wp-json/auto1-ops/v1/seo/<postId>/rollback'),
+        }
+        for name, (method, path) in contracts.items():
+            endpoint = endpoints.get(name, {})
+            if not isinstance(endpoint, Mapping) or endpoint.get('method') != method or endpoint.get('path') != path or endpoint.get('available') is not True:
+                return result
+        result['read'] = True
+        post_types = writable.get('postTypes')
+        result['write'] = (writable.get('seoFields') is True
+                           and isinstance(post_types, list)
+                           and all(isinstance(item, str) for item in post_types)
+                           and set(post_types) == {'post', 'page'}
+                           and seo.get('enabled') is True and seo.get('rollback') is True)
+        result['writable_fields'] = ['description', 'title'] if result['write'] else []
+        return result
+
     async def discover(self) -> dict[str, Any]:
         """Discover native and explicitly namespaced capabilities."""
 
@@ -948,6 +1003,13 @@ class WordPressClient(AsyncConnector):
         )
         plugins["forgeseo"]["writable_fields"] = sorted(self._forgeseo_fields)
         self._seo_provider = self._seo_provider_for_plugins(plugins)
+        auto1 = await self._discover_auto1_seo(namespaces)
+        if auto1 is not None:
+            plugins['auto1_ops'] = auto1
+            # Multiple independently active writers need an explicit review.
+            self._auto1_seo_write = auto1['write'] and self._seo_provider is None
+            if self._auto1_seo_write:
+                self._seo_provider = 'auto1_ops'
 
         wp_v2 = "wp/v2" in namespaces
         native = {
@@ -981,10 +1043,10 @@ class WordPressClient(AsyncConnector):
             "plugins": plugins,
             "seo": {
                 "provider": self._seo_provider,
-                "active_provider": connector_capabilities.get("seo_provider"),
+                "active_provider": 'auto1_ops' if self._auto1_seo_write else connector_capabilities.get("seo_provider"),
                 "read": any(plugin["read"] for plugin in plugins.values()),
-                "write": plugins["forgeseo"]["write"],
-                "writable_fields": sorted(self._forgeseo_fields),
+                "write": plugins["forgeseo"]["write"] or self._auto1_seo_write,
+                "writable_fields": ['description', 'title'] if self._auto1_seo_write else sorted(self._forgeseo_fields),
             },
             # Flat aliases are useful to UI capability consumers and preserve
             # a stable JSON shape without exposing credentials.
@@ -1365,7 +1427,7 @@ class WordPressClient(AsyncConnector):
     def _seo_from_raw(self, raw: Mapping[str, Any]) -> dict[str, Any]:
         meta = self._raw_meta(raw)
         result: dict[str, Any] = {}
-        providers = ["forgeseo", "yoast", "rank_math"]
+        providers = ["auto1_ops", "forgeseo", "yoast", "rank_math"]
         for provider in providers:
             fields = _SEO_READ_KEYS[provider]
             values = {
@@ -1542,7 +1604,7 @@ class WordPressClient(AsyncConnector):
         return remote_id
 
     def _validate_seo(self, value: Any) -> dict[str, str]:
-        if (
+        if not self._auto1_seo_write and (
             not self._forgeseo_seo_route
             or not self._forgeseo_fields
             or not self._forgeseo_seo_methods
@@ -1553,7 +1615,8 @@ class WordPressClient(AsyncConnector):
         result: dict[str, str] = {}
         for field, item in value.items():
             name = str(field)
-            if name not in _SEO_FIELDS or name not in self._forgeseo_fields:
+            allowed_fields = {'title', 'description'} if self._auto1_seo_write else self._forgeseo_fields
+            if name not in _SEO_FIELDS or name not in allowed_fields:
                 raise UnsupportedField(f"seo.{name}")
             result[name] = self._ensure_string(f"seo.{name}", item)
             if name == "canonical_url" and result[name]:
@@ -1761,7 +1824,41 @@ class WordPressClient(AsyncConnector):
             changes["status"] = raw["status"]
         if isinstance(raw.get('forgeseo_seo'),Mapping):
             changes['seo']={key:str(raw['forgeseo_seo'].get(key,'')) for key in ('title','description')}
+        elif self._auto1_seo_write:
+            meta = self._raw_meta(raw)
+            changes['seo'] = {key: str(meta.get(field, '')) for key, field in _SEO_READ_KEYS['auto1_ops'].items()}
         return changes
+
+    async def _write_auto1_seo(self, resource_key, current, endpoint, remote_id, seo, operation_key):
+        """Validate, fence, apply only two known fields, and independently reread."""
+        if endpoint not in {'posts', 'pages'} or self._raw_meta(current.get('raw', {})).get('auto1_disable_seo_rendering') is True:
+            raise UnsupportedField('seo', 'Auto1 SEO rendering is not enabled for this target')
+        fields = {_SEO_READ_KEYS['auto1_ops'][key]: value for key, value in seo.items()}
+        route = f'auto1-ops/v1/seo/{remote_id}'
+        validation, _ = await self._json_request('POST', self._wp_path(route + '/validate'), json={'fields': fields})
+        if not isinstance(validation, Mapping) or str(validation.get('postId')) != remote_id or validation.get('fields') != fields or not isinstance(validation.get('validation'), Mapping) or validation['validation'].get('valid') is not True:
+            raise ConnectorError('Auto1 SEO validation rejected the requested fields')
+        await self._recheck_source_before_write(resource_key, current)
+        try:
+            applied, _ = await self._json_request('POST', self._wp_path(route + '/apply'), json={'fields': fields}, headers=self._operation_headers(operation_key))
+        except ConnectorError as exc:
+            if not exc.transport_error:
+                raise
+            # Never replay a request whose remote outcome is uncertain.
+            applied = None
+        try:
+            observed = await self.read(resource_key)
+        except Exception as exc:
+            raise AmbiguousOutcome('Auto1 SEO write requires reconciliation after verification failed', operation_key=operation_key) from exc
+        observed_values = self._seo_from_raw(observed.get('raw', {})).get('auto1_ops', {})
+        before_native = self._editorial_source(current.get('raw', {}), endpoint)
+        after_native = self._editorial_source(observed.get('raw', {}), endpoint)
+        before_native.pop('seo', None)
+        after_native.pop('seo', None)
+        if any(observed_values.get(key, '') != value for key, value in seo.items()) or stable_hash(before_native) != stable_hash(after_native):
+            raise AmbiguousOutcome('Auto1 SEO write could not be independently verified', operation_key=operation_key)
+        if applied is not None and (not isinstance(applied, Mapping) or applied.get('status') != 'applied' or str(applied.get('postId')) != remote_id):
+            raise AmbiguousOutcome('Auto1 SEO apply response was invalid', operation_key=operation_key)
 
     def _native_rollback_payload(
         self,
@@ -2193,6 +2290,9 @@ class WordPressClient(AsyncConnector):
                 write_base = native_after if native_after is not None else current
                 await self._recheck_source_before_write(resource_key, write_base)
                 await self._ensure_write_permission("update", endpoint=endpoint)
+                if self._auto1_seo_write:
+                    await self._write_auto1_seo(resource_key, write_base, endpoint, remote_id, seo, operation_key)
+                    return await self.read(resource_key)
                 method = next(
                     (
                         candidate

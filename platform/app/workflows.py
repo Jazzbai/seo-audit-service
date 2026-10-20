@@ -134,7 +134,7 @@ def candidate_value(source, field):
     seo = (((source or {}).get('metadata') or {}).get('seo') or {})
     if not isinstance(seo, dict):
         return ''
-    for provider in ('forgeseo', 'yoast', 'rank_math'):
+    for provider in ('auto1_ops', 'forgeseo', 'yoast', 'rank_math'):
         values = seo.get(provider)
         if isinstance(values, dict) and values.get(key):
             return str(values[key])

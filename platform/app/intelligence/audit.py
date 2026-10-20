@@ -687,7 +687,7 @@ def _source_seo_values(source: Any) -> dict[str, str]:
     if not isinstance(seo, dict):
         return {}
     values: dict[str, str] = {}
-    for provider in ("forgeseo", "yoast", "rank_math"):
+    for provider in ("auto1_ops", "forgeseo", "yoast", "rank_math"):
         record = seo.get(provider)
         if not isinstance(record, dict):
             continue
