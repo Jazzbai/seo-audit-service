@@ -1225,6 +1225,21 @@ async def connection_test(db, site, job):
             raise
         row.capabilities = {**row.capabilities, **result}
         row.status = 'connected'
+        # Capability upgrades must refresh existing suggestions even when a
+        # fresh crawl produces no replacement proposal (for example, cached
+        # HTML already contains a description). Preserve all non-capability
+        # review reasons and leave decisions/source hashes unchanged.
+        resource_types = {'posts', 'pages'} if kind == 'wordpress' else {'products', 'product', 'categories', 'product_categories', 'category'}
+        for candidate, page in db.execute(
+            select(Candidate, Page).join(Page, Candidate.page_id == Page.id).where(
+                Candidate.site_id == site.id, Page.site_id == site.id,
+                Page.resource_type.in_(resource_types),
+                Candidate.status.in_(['pending', 'approved', 'review_needed']),
+                Candidate.field.in_(['seo_title', 'meta_description']),
+            )
+        ):
+            readiness = metadata_candidate_readiness(db, site, page, candidate.field)
+            candidate.details = apply_metadata_readiness(candidate.details, readiness)
     elif kind in ('gsc', 'ga4'):
         # Google read-only connections are verified with the same provider
         # request used by scheduled visibility collection. Saving OAuth

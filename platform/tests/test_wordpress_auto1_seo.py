@@ -1,6 +1,7 @@
 """Auto1 bridge contract: narrow SEO writes with independent source verification."""
 import copy
 import json
+import asyncio
 
 import httpx
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.connectors import AmbiguousOutcome, ConnectorError, SourceConflict, UnsupportedField
 from app.connectors.wordpress import WordPressClient
 from test_wordpress_capabilities import _index
+from test_platform import platform
 
 
 def bridge_fixture(*, writable=True, valid=True, drift=False, ignore_write=False, timeout=False):
@@ -46,6 +48,9 @@ def bridge_fixture(*, writable=True, valid=True, drift=False, ignore_write=False
                                            'publish_posts': True, 'edit_published_posts': True}}
         elif path == '/wp-json/wp/v2/posts/7' and request.method == 'GET':
             data = post
+        elif path == '/wp-json/wp/v2/posts/7' and request.method == 'POST':
+            assert json.loads(request.content) == {}
+            data = post
         elif path == '/wp-json/auto1-ops/v1/seo/7/validate':
             fields = json.loads(request.content)['fields']
             data = {'postId': 7, 'fields': fields, 'validation': {'valid': valid}}
@@ -83,6 +88,7 @@ async def test_auto1_discovery_and_selected_field_write_preserve_native_and_othe
         assert post['content'] == original['content']
         assert post['meta']['_elementor_data'] == original['meta']['_elementor_data']
         assert post['meta']['auto1_seo_title'] == 'Original title'
+        assert calls.count(('POST', '/wp-json/wp/v2/posts/7')) == 1
         await client.update('post:7', {'seo': {'description': ''}}, updated['source_hash'])
         assert post['meta']['auto1_meta_description'] == ''
         with pytest.raises(UnsupportedField):
@@ -149,3 +155,46 @@ async def test_auto1_timeout_is_reconciled_without_repeating_apply():
                                      (await client.read('post:7'))['source_hash'])
         assert result['metadata']['seo']['auto1_ops']['description'] == 'Stored before timeout'
     assert sum(path.endswith('/apply') for _, path in calls) == 1
+
+
+def test_connection_upgrade_refreshes_existing_candidates_without_new_proposals(platform, monkeypatch):
+    from app import workflows
+    from app.models import Candidate, Connection, Job, Page, Site
+
+    _, factory, site_id = platform
+
+    class VerifiedBridge:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def validate_connection(self):
+            return {'seo': {'write': True, 'writable_fields': ['title', 'description']}}
+
+        async def discover_authors(self):
+            return {'items': [], 'complete': True}
+
+    async def client_for(*args):
+        return VerifiedBridge()
+
+    monkeypatch.setattr(workflows, 'client_for', client_for)
+    with factory() as db:
+        page = Page(site_id=site_id, resource_key='posts:7', resource_type='posts',
+                    url='https://fixture.test/guide/', source_hash='unchanged-source')
+        db.add(page)
+        db.flush()
+        candidate = Candidate(site_id=site_id, page_id=page.id, field='meta_description',
+                              source_hash='unchanged-source', before_value='', after_value='A useful description.',
+                              status='pending', details={'review_only_reasons': ['wordpress_seo_writer_not_verified', 'editorial_review_required'],
+                                                         'execution_readiness': {'blockers': ['wordpress_seo_writer_not_verified']}})
+        db.add(candidate)
+        db.add(Connection(site_id=site_id, kind='wordpress', status='configured',
+                          encrypted_credentials='fixture-only', capabilities={}))
+        db.commit()
+        asyncio.run(workflows.connection_test(db, db.get(Site, site_id), Job(payload={'kind': 'wordpress'})))
+        assert candidate.status == 'pending'
+        assert candidate.source_hash == 'unchanged-source'
+        assert candidate.details['review_only_reasons'] == ['editorial_review_required']
+        assert candidate.details['execution_readiness']['execution_ready'] is True

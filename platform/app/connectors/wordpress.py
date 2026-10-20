@@ -1859,6 +1859,16 @@ class WordPressClient(AsyncConnector):
             raise AmbiguousOutcome('Auto1 SEO write could not be independently verified', operation_key=operation_key)
         if applied is not None and (not isinstance(applied, Mapping) or applied.get('status') != 'applied' or str(applied.get('postId')) != remote_id):
             raise AmbiguousOutcome('Auto1 SEO apply response was invalid', operation_key=operation_key)
+        # The bridge updates post meta directly. A field-free native update
+        # runs WordPress's ordinary post-save/cache invalidation hooks without
+        # submitting any title, body, layout, or status change.
+        try:
+            await self._write_native(endpoint, remote_id, {}, operation_key=operation_key)
+            refreshed = await self.read(resource_key)
+        except Exception as exc:
+            raise AmbiguousOutcome('Auto1 SEO cache refresh needs reconciliation', operation_key=operation_key) from exc
+        if refreshed['source_hash'] != observed['source_hash']:
+            raise AmbiguousOutcome('Auto1 SEO source changed during cache refresh', operation_key=operation_key)
 
     def _native_rollback_payload(
         self,
