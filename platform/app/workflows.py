@@ -1905,6 +1905,26 @@ def _content_autopilot_topic_blockers(site, article):
     return []
 
 
+def _content_autopilot_has_topic_sources(site, article):
+    """Minimum evidence-shape guard, not a claim of research adequacy."""
+    own_host = (urlsplit(site.origin).hostname or '').casefold().removeprefix('www.')
+    entries = article.sources if isinstance(article.sources, list) else []
+    for entry in entries:
+        value = entry.get('url') if isinstance(entry, dict) else entry
+        if not isinstance(value, str):
+            continue
+        try:
+            parsed = urlsplit(value)
+            host = (parsed.hostname or '').casefold().removeprefix('www.')
+            if parsed.scheme not in {'http', 'https'} or not host or parsed.username or parsed.password:
+                continue
+            if host != own_host or parsed.path.strip('/'):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 async def content_autopilot(db, site, job):
     """Run one policy-governed article from plan through verified publication.
 
@@ -2215,10 +2235,7 @@ async def content_autopilot(db, site, job):
         article.updated_at = now()
         db.commit()
     # A homepage fetch alone is business background, not topic research.
-    source_urls = [value.get('url', '') if isinstance(value, dict) else str(value)
-                   for value in (article.sources or [])]
-    if not source_urls or all(urlsplit(value).netloc == urlsplit(site.origin).netloc
-                           and urlsplit(value).path in ('', '/') for value in source_urls):
+    if not _content_autopilot_has_topic_sources(site, article):
         article.status = 'review_needed'
         article.checks = {'passed': False, 'blockers': ['topic_specific_research_required'], 'warnings': []}
         db.commit()

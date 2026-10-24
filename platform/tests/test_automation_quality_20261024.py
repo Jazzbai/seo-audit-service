@@ -12,6 +12,19 @@ from app.workflows import _content_autopilot_topic_blockers
 from test_platform import platform
 
 
+@pytest.mark.parametrize('sources, expected', [
+    (['https://www.example.test/?tracking=1#top'], False),
+    (['https://[', None, {'url': []}, 'not-a-url'], False),
+    (['javascript:alert(1)', 'https://user:secret@example.test/services/'], False),
+    ([{'url': 'https://example.test/services/repairs/'}], True),
+    (['https://independent.test/research'], True),
+])
+def test_topic_source_shape_rejects_homepage_aliases_and_malformed_entries(sources, expected):
+    from app.workflows import _content_autopilot_has_topic_sources
+    assert _content_autopilot_has_topic_sources(
+        SimpleNamespace(origin='https://example.test'), SimpleNamespace(sources=sources)) is expected
+
+
 @pytest.mark.parametrize('sources', [[], ['https://example.test/']])
 def test_content_autopilot_requires_topic_sources_before_paid_generation(platform, monkeypatch, sources):
     from app import workflows
@@ -70,6 +83,18 @@ def test_local_services_action_is_available_but_does_not_claim_google_writes(pla
         'services': ['Repair'], 'confirmed_sources': ['https://[', 'https://example.test/services']}))
     assert plan['status'] == 'needs_profile_access'
     assert plan['sources'] == ['https://example.test/services']
+
+
+def test_service_review_deduplicates_without_mutating_saved_business_facts():
+    from app.local_presence import service_plan
+    facts = {'services': [' Bumper  repair ', 'bumper repair', 'CAR PAINTING', '', None],
+             'confirmed_sources': ['https://example.test/services/', 'https://example.test/services/',
+                                   'https://unrelated.test/services/', 'javascript:alert(1)']}
+    plan = service_plan(SimpleNamespace(id='x', origin='https://example.test', facts=facts))
+    assert plan['services'] == ['Bumper repair', 'CAR PAINTING']
+    assert plan['sources'] == ['https://example.test/services/']
+    assert facts['services'][0] == ' Bumper  repair '
+    assert len(facts['confirmed_sources']) == 4
 
 
 def test_tracking_pixels_do_not_become_alt_text_work():

@@ -9,8 +9,19 @@ def service_plan(site):
     facts = site.facts if isinstance(site.facts, dict) else {}
     services = facts.get('services', [])
     services = services if isinstance(services, list) else []
-    names = list(dict.fromkeys(value.strip() for value in services
-                               if isinstance(value, str) and 1 <= len(value.strip()) <= 120))[:50]
+    names = []
+    seen = set()
+    for value in services:
+        if not isinstance(value, str):
+            continue
+        name = ' '.join(value.split())
+        key = name.casefold()
+        if not 1 <= len(name) <= 120 or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) >= 50:
+            break
     refs = facts.get('confirmed_sources', [])
     refs = refs if isinstance(refs, list) else []
     origin = urlsplit(site.origin)
@@ -22,7 +33,7 @@ def service_plan(site):
             parsed = urlsplit(url)
         except ValueError:
             continue
-        if parsed.scheme == 'https' and parsed.netloc == origin.netloc:
+        if parsed.scheme == 'https' and parsed.netloc == origin.netloc and url not in sources:
             sources.append(url)
         if len(sources) >= 50:
             break

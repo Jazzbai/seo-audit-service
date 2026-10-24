@@ -36,7 +36,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installSettingsMocks(page: Page, options: { connections?: unknown[]; policy?: Record<string, unknown>; authorDiscovery?: unknown } = {}) {
+async function installSettingsMocks(page: Page, options: { sites?: typeof site[]; connections?: unknown[]; policy?: Record<string, unknown>; authorDiscovery?: unknown } = {}) {
   const connections = options.connections ?? []
   const policy = { ...basePolicy, ...(options.policy ?? {}) }
   const authorDiscovery = options.authorDiscovery ?? {
@@ -52,7 +52,7 @@ async function installSettingsMocks(page: Page, options: { connections?: unknown
     const path = url.pathname.replace('/api/v1', '')
     if (path === '/auth/status') return json(route, { initialized: true })
     if (path === '/auth/me') return json(route, auth)
-    if (path === '/sites' && request.method() === 'GET') return json(route, { items: [site], total: 1 })
+    if (path === '/sites' && request.method() === 'GET') return json(route, { items: options.sites ?? [site], total: options.sites?.length ?? 1 })
     if (path === '/sites/site-1/policy') return json(route, { id: 'policy-1', version: 4, settings: policy })
     if (path === '/settings') return json(route, { global_pause: true })
     if (path === '/sites/site-1' && request.method() === 'GET') return json(route, site)
@@ -89,8 +89,26 @@ test('connections offers a manual service review without claiming automated Goog
   await page.goto('/sites/site-1/settings/connections')
   await expect(page.getByRole('heading', { name: 'Google Business Profile services' })).toBeVisible()
   await expect(page.getByText('Collision repair', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'https://pilot.example/services/', exact: true })).toHaveAttribute('href', 'https://pilot.example/services/')
+  await expect(page.getByText('These are saved business sources, not independent verification of services or Google listing eligibility.')).toBeVisible()
   await expect(page.getByText('Google service updates are not automated by this integration.', { exact: false })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Open Google Business Profile' })).toHaveAttribute('href', 'https://business.google.com/locations')
+})
+
+test('another site with a failed service fetch does not display the first site suggestions', async ({ page }) => {
+  await installSettingsMocks(page, { sites: [site, { ...site, id: 'site-2', name: 'Other Workshop' }] })
+  await page.route('**/api/v1/sites/site-2/**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (path.endsWith('/local-presence/services')) return json(route, { detail: 'Unavailable' }, 503)
+    if (path.endsWith('/policy')) return json(route, { settings: basePolicy })
+    return json(route, { items: [], total: 0 })
+  })
+  await page.goto('/sites/site-1/settings/connections')
+  await expect(page.getByText('Collision repair', { exact: true })).toBeVisible()
+  await page.goto('/sites/site-2/settings/connections')
+  await expect(page.getByText('Collision repair', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'https://pilot.example/services/', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Google Business Profile services' })).toBeVisible()
 })
 
 test('settings blocks a monthly budget above the API ceiling before submission', async ({ page }) => {

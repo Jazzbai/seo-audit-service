@@ -1,5 +1,16 @@
 # Auto1Stop automation follow-up — October 24, 2026
 
+## Local-only follow-up while VPN is unavailable
+
+At the owner's request, further work stays local: no deployment, remote push, paid provider call, WordPress write or Google listing change in this follow-up. The prior release `9b90cfb` remains queued for deployment.
+
+- Hardened topic-source validation: malformed URLs, non-HTTP URLs, URLs with embedded credentials and the site's `www` homepage alias do not pass the minimum research guard. Valid topic-page references still pass; URL shape alone is not proof of adequate research.
+- Service suggestions collapse whitespace and case-insensitive duplicates without changing saved business facts. Duplicate source URLs are removed, while unrelated and non-HTTPS sources remain excluded.
+- The service-review card now exposes source links and explains their business-published evidence limitation. Missing facts link directly to Business settings. Component state resets for a new site so old suggestions cannot be reused by that card.
+- Full backend suite after these changes: **909 passed, 30 skipped**. Final full local Playwright UI suite: **177 passed**. Frontend production build passed with the existing bundle-size warning. All browser checks use local/mocked data; these are not live deployment acceptance results.
+
+Remaining Google management authorization, listing writes, backup/restore evidence, bill reconciliation and deployment are not supplied by local tests.
+
 ## Release state
 
 Development is tested locally, not deployed. Production was still at `13b5866` when checked. Coolify `10.0.1.12:8000` timed out in controlled Chrome and two TCP checks failed; VPN/private-network access is required before deployment. Do not confuse the live settings changes below with the pending code release.

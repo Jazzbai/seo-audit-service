@@ -380,6 +380,8 @@ function LocalPresenceServices() {
     <ResourceStateView resource={resource}>{data => <>
       <Notice kind="info">{data.status === 'needs_business_facts' ? 'Add confirmed services and source URLs in Business settings first.' : 'Service suggestions are ready. Sign in to the matching Business Profile to review and add missing services.'} Google service updates are not automated by this integration.</Notice>
       <ul>{data.services?.map(name => <li key={name}>{name}</li>)}</ul>
+      {data.sources?.length > 0 && <><h4>Business source URLs</h4><p>These are saved business sources, not independent verification of services or Google listing eligibility.</p><ul>{data.sources.map(url => <li key={url} style={{ overflowWrap: 'anywhere' }}><a href={url} target="_blank" rel="noreferrer">{url}</a></li>)}</ul></>}
+      {data.status === 'needs_business_facts' && <Link to={`/sites/${siteId}/settings/business`}>Add confirmed business facts</Link>}
       <ul>{data.requirements?.map(item => <li key={item}>{item}</li>)}</ul>
       <a className="button button-secondary button-sm" href="https://business.google.com/locations" target="_blank" rel="noreferrer">Open Google Business Profile</a>
     </>}</ResourceStateView>
@@ -444,7 +446,7 @@ export function ConnectionsPage() {
       return definition.kind === 'microsoft_graph'
         ? <MicrosoftGraphConnectionCard key={key} connection={connection} siteId={siteId} canEdit={canEdit} onChanged={async (nextMessage) => { setMessage(nextMessage); await resource.reload() }} />
         : <ConnectionCard key={key} definition={definition} connection={connection} siteId={siteId} canEdit={canEdit} onChanged={async (nextMessage) => { setMessage(nextMessage); await resource.reload() }} onError={setError} />
-    })}</div><LocalPresenceServices /></>}
+    })}</div><LocalPresenceServices key={siteId} /></>}
   </ResourceStateView>
  }
 
