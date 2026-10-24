@@ -13,7 +13,13 @@ Remaining Google management authorization, listing writes, backup/restore eviden
 
 ## Release state
 
-Development is tested locally, not deployed. Production was still at `13b5866` when checked. Coolify `10.0.1.12:8000` timed out in controlled Chrome and two TCP checks failed; VPN/private-network access is required before deployment. Do not confuse the live settings changes below with the pending code release.
+October 24, approximately 5:07 PM America/Chicago: the owner supplied public Coolify access and signed in after the HTTP transport warning. Backend deployment `syibl3savrbjvps80tkdbnz5` and frontend deployment `nimkkbyz9mlazgv06xuajabk` completed at commit `fd23aa5`. No Coolify application configuration or other sites were changed. The initial private-address/VPN failure is historical, not a current deployment blocker.
+
+Live checks: `/health` returned success; the new service plan endpoint returned the five saved services; source-filtered collections returned 11 GSC observations and 3 AI-sample records instead of uptime samples. The UI showed 11 GSC rows and 3 AI rows, and next-page navigation reached 161 older records out of 361 non-uptime observations. The live service card displayed source links and explicitly identified Google updates as manual. No browser page errors were observed during these checks.
+
+Auto1Stop and the workspace remain unpaused, H-Town remains paused, and monitoring resumed after the Compose restart. A brief API 502 response was observed during replacement before health recovered. This deployment did not run a paid collection, force publication or change public WordPress content.
+
+Production testing exposed a separate UI evidence-label issue: real `ai_sample` observations displayed as “Unknown / Imported.” Frontend-only fix `e44e2b8` labels them “AI Response Sample” with explicit non-ranking limitations. Forty related local browser tests and the build passed. Correction deployment `nucx3zutmvkrmtibp9oe3aau` finished around 5:09 PM America/Chicago; the live asset `/assets/index-DY_IifuQ.js` and all three correctly labeled AI rows were verified with no page errors. Imported evidence retains its existing conservative label. Screenshots: `local-services-live-2026-10-24.png` and `ai-visibility-live-2026-10-24.png` in this directory.
 
 ## Live ForgeSEO settings and actions completed
 
@@ -26,7 +32,7 @@ Development is tested locally, not deployed. Production was still at `13b5866` w
 - Created source-backed planned article `b370875c1c3d423582d50f43fcc2c89e`: “Scratch touch-up or panel repaint? Questions to ask a Houston body shop.” It has not been generated or published; next scheduled execution still needs verification.
 - October budget ledger readback: $300 limit, $2.50 reserved, $0 settled. Settled zero is NOT evidence of zero provider charges. Actual costs remain unreconciled; estimates were not substituted for bills.
 
-## ForgeSEO code changes awaiting deployment
+## ForgeSEO implemented changes
 
 1. Visibility measurements are filtered by source before pagination, excluding uptime samples by default. Added source picker and previous/next pagination so older organic/analytics/AI observations remain reachable.
 2. Failed Search Console/GA4 collection updates connection readiness instead of leaving a stale successful check visible. Policy questions override stale connection research prompts for AI sampling.
@@ -52,7 +58,7 @@ The new settings, source-backed brief and visibility baseline therefore cannot y
 
 ## Remaining work
 
-- Restore private-network/VPN access; deploy backend and frontend, verify release identifiers and exercise the new screens against production. Do not report a push alone as deployment.
+- Backend/frontend deployment, filtered measurement pagination, service-review card and AI evidence-label verification are complete. Backend runs `fd23aa5`; frontend runs `e44e2b8` (frontend-only follow-up).
 - Verify the next scheduled article runs with topic evidence, passes checks, respects protected paths and records any actual publication. No forced extra paid generation/publication was used as a shortcut.
 - Manually review the matching Auto1Stop Google listing in normal Chrome; add only missing confirmed services, preserve existing services and verify the saved list. User requested screenshot-guided steps after development because Google blocked login in controlled Chrome.
 - Implement separately authorized Business Profile management if unattended Google service synchronization is required; current release supplies review actions only.
