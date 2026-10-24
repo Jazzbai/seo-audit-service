@@ -1585,6 +1585,8 @@ def _planning_measurement_inputs(db, site_id):
 
 
 async def plan(db, site, job):
+    from app.local_presence import service_plan
+    event(db, site, 'local_presence_services_review', 'Review Google Business Profile services', service_plan(site))
     from app.intelligence.content import plan_topics
     pages = [record(p) for p in db.scalars(select(Page).where(Page.site_id == site.id))]
     policy = current_policy(db, site.id)
@@ -1892,6 +1894,13 @@ def _content_autopilot_topic_blockers(site, article):
     if title.startswith(('qa test only', 'test only')):
         return ['test_article_not_eligible']
     if brief.get('automation_review_required') is True or (business and title == f'about {business}'):
+        return ['topic_requires_editorial_review']
+    # Search demand is not proof the business offers the service or hours.
+    if re.search(r'\b(24[ -]?hour|24/7|open now|emergency)\b', title):
+        return ['availability_topic_requires_verified_hours']
+    if re.search(r'\b(attorney|lawyer|legal advice)\b', title):
+        return ['regulated_topic_requires_editorial_review']
+    if title in {'auto guide', 'auto 1 guide', 'a u t o collision guide'}:
         return ['topic_requires_editorial_review']
     return []
 
@@ -2205,6 +2214,17 @@ async def content_autopilot(db, site, job):
             return _content_autopilot_finish(db, site, job, result)
         article.updated_at = now()
         db.commit()
+    # A homepage fetch alone is business background, not topic research.
+    source_urls = [value.get('url', '') if isinstance(value, dict) else str(value)
+                   for value in (article.sources or [])]
+    if not source_urls or all(urlsplit(value).netloc == urlsplit(site.origin).netloc
+                           and urlsplit(value).path in ('', '/') for value in source_urls):
+        article.status = 'review_needed'
+        article.checks = {'passed': False, 'blockers': ['topic_specific_research_required'], 'warnings': []}
+        db.commit()
+        return _content_autopilot_finish(db, site, job, _content_autopilot_base(
+            job, preflight, status='needs_review', stages=stages, article_id=article.id,
+            blockers=['topic_specific_research_required'], next_action='add_topic_specific_sources'))
     stages.append(_content_autopilot_safe_stage(
         'research',
         'complete',
@@ -3481,6 +3501,10 @@ async def visibility(db, site, job):
         config.setdefault('url', site.origin)
     config.setdefault('keywords',config.get('tracked_keywords',[]))
     config.setdefault('questions',config.get('tracked_questions',[]))
+    if kind == 'ai_sample' and policy and policy.settings.get('tracked_questions'):
+        # Site policy is the owner's visibility question set. A connection's
+        # old research prompt must not silently replace it.
+        config['questions'] = list(policy.settings['tracked_questions'])
     paid = kind in ('dataforseo','ai_sample')
     reservation_config = config
     if kind == 'ai_sample':
@@ -3511,7 +3535,19 @@ async def visibility(db, site, job):
     if result.get('status') == 'error' or result.get('error'):
         if reservation and result.get('cost_basis') == 'provider_actual':
             reconcile_provider_cost(db,site,reservation,result)
-        raise ValueError('Visibility collection needs attention: '+result.get('error',{}).get('code','provider_error'))
+        connection = find_connection(db, site.id, connection_kind)
+        error = result.get('error') if isinstance(result.get('error'), dict) else {}
+        code = error.get('code', 'provider_error')
+        code = code[:64] if isinstance(code, str) and re.fullmatch(r'[a-z0-9_]+', code) else 'provider_error'
+        if connection and kind in {'gsc', 'ga4'}:
+            connection.status = 'error'
+            connection.checked_at = now()
+            connection.capabilities = {**(connection.capabilities or {}), 'last_connection_test': {
+                'status': 'error', 'kind': kind, 'tested_at': iso(connection.checked_at),
+                'error_code': code, 'read_only': True,
+            }}
+            db.commit()
+        raise ValueError('Visibility collection needs attention: ' + code)
     if reservation:
         reconcile_provider_cost(db,site,reservation,result)
     data=result['data'] if isinstance(result['data'],dict) else {'observations':result['data']}

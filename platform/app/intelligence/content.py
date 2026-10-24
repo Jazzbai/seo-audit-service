@@ -1857,6 +1857,8 @@ async def generate_article(
             "do_not_invent_sources_or_claims": True,
             "return_json_with_title_body_sources": True,
             "draft_requires_editorial_check": True,
+            "body_format": "HTML fragment using h2/h3, p, ul/ol/li and a; no h1, html, head, body, scripts, styles or markdown fences",
+            "do_not_claim_unverified_hours_services_credentials_or_guarantees": True,
         },
     }
     if research is not None:
@@ -1876,7 +1878,6 @@ async def generate_article(
             return failure("invalid_output_limit", "max_output_tokens must be an integer from 1 to 16384")
         # The shared connection may enable search for visibility sampling. Draft
         # generation uses its already-researched evidence, without extra tool calls.
-        request_payload["constraints"]["body_format"] = "HTML article body, without a document wrapper"
         request_body = {
             "model": model,
             "input": json.dumps(request_payload, ensure_ascii=False),
@@ -1967,9 +1968,18 @@ async def generate_article(
 
     supplied_sources = _supplied_source_entries(brief, facts)
     merged_sources, unverified_sources = _merge_sources(supplied_sources, provider_article.get("sources"))
+    body = provider_article['body']
+    repairs = []
+    # A draft's page title is rendered by WordPress. Demote only a leading
+    # attribute-free H1, preserving text and all other checks. No second paid
+    # generation and no sanitizing dangerous markup into a passing result.
+    if re.match(r'^\s*<h1>[^<]+</h1>', body, re.IGNORECASE):
+        body = re.sub(r'^(\s*)<h1>([^<]+)</h1>', r'\1<h2>\2</h2>', body, count=1, flags=re.IGNORECASE)
+        repairs.append('leading_h1_demoted_to_h2')
+    base_provenance['format_repairs'] = repairs
     article: dict[str, Any] = {
         "title": provider_article["title"],
-        "body": provider_article["body"],
+        "body": body,
         "brief": brief,
         "sources": merged_sources,
         "author_id": provider_article.get("author_id") or brief.get("author_id"),

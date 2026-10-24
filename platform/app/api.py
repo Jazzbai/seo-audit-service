@@ -652,6 +652,13 @@ async def discover_site_authors(site_id: str, response: Response, ctx=Depends(re
     return result
 
 
+@router.get('/sites/{site_id}/local-presence/services')
+def local_presence_services(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    from app.local_presence import service_plan
+    site = guard(db, ctx, site_id)
+    return service_plan(site)
+
+
 @router.get('/sites/{site_id}/google-oauth/config')
 def google_oauth_config(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     guard(db, ctx, site_id)
@@ -852,11 +859,20 @@ def save_policy(site_id: str, payload: PolicyInput, ctx=Depends(require_user), d
 # All collection routes share the same ownership and pagination rules.
 def collection_route(cls, extra_filter=None, transform=record, order_by=None):
     def endpoint(site_id: str, ctx=Depends(require_user), db=Depends(get_db),
-                 limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+                 limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                 source: str | None = Query(None, max_length=64)):
         guard(db, ctx, site_id)
         filters = [cls.site_id == site_id]
         if extra_filter is not None:
             filters.append(extra_filter)
+        if cls is Measurement and source:
+            # Filter before pagination: minute-by-minute uptime records must
+            # not displace daily search/analytics observations.
+            if source == 'visibility':
+                filters.append(Measurement.kind != 'availability')
+            else:
+                aliases = ['ai', 'ai_sample'] if source in ('ai', 'ai_sample') else [source]
+                filters.append((Measurement.kind.in_(aliases)) | (Measurement.source.in_(aliases)))
         return paginated(db, cls, filters, limit, offset, transform=transform, order_by=order_by)
     return endpoint
 

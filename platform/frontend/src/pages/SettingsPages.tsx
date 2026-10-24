@@ -371,6 +371,21 @@ function ConnectionCapabilitySummary({ definition, connection }: { definition: C
   </section>
 }
 
+function LocalPresenceServices() {
+  const siteId = useSiteId()
+  const loader = useCallback(() => operationsApi.localServices(siteId), [siteId])
+  const resource = useResource(loader, [siteId])
+  return <Panel padded><h3>Google Business Profile services</h3>
+    <p>Local SEO action for this site. Website ownership does not establish Business Profile eligibility or manager access.</p>
+    <ResourceStateView resource={resource}>{data => <>
+      <Notice kind="info">{data.status === 'needs_business_facts' ? 'Add confirmed services and source URLs in Business settings first.' : 'Service suggestions are ready. Sign in to the matching Business Profile to review and add missing services.'} Google service updates are not automated by this integration.</Notice>
+      <ul>{data.services?.map(name => <li key={name}>{name}</li>)}</ul>
+      <ul>{data.requirements?.map(item => <li key={item}>{item}</li>)}</ul>
+      <a className="button button-secondary button-sm" href="https://business.google.com/locations" target="_blank" rel="noreferrer">Open Google Business Profile</a>
+    </>}</ResourceStateView>
+  </Panel>
+}
+
 export function ConnectionsPage() {
   const siteId = useSiteId()
   const { role } = useAuth()
@@ -429,7 +444,7 @@ export function ConnectionsPage() {
       return definition.kind === 'microsoft_graph'
         ? <MicrosoftGraphConnectionCard key={key} connection={connection} siteId={siteId} canEdit={canEdit} onChanged={async (nextMessage) => { setMessage(nextMessage); await resource.reload() }} />
         : <ConnectionCard key={key} definition={definition} connection={connection} siteId={siteId} canEdit={canEdit} onChanged={async (nextMessage) => { setMessage(nextMessage); await resource.reload() }} onError={setError} />
-    })}</div></>}
+    })}</div><LocalPresenceServices /></>}
   </ResourceStateView>
  }
 

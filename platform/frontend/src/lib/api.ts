@@ -277,6 +277,7 @@ export const storeApi = {
 }
 
 export const operationsApi = {
+  localServices: (siteId: string) => request<{ status: string; services: string[]; sources: string[]; requirements: string[]; remote_write_supported: boolean; manage_url: string }>(`/sites/${encode(siteId)}/local-presence/services`),
   incidents: (siteId: string, params?: Record<string, string | number | undefined>) => list<Incident>(`/sites/${encode(siteId)}/incidents`, params),
   activity: (siteId: string, params?: Record<string, string | number | undefined>) => list<EventRecord>(`/sites/${encode(siteId)}/activity`, params),
   measurements: (siteId: string, params?: Record<string, string | number | undefined>) => list<Measurement>(`/sites/${encode(siteId)}/measurements`, params),

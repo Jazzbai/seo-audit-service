@@ -1223,7 +1223,15 @@ def audit_page(url: str, html: str, source: Any = None) -> dict[str, Any]:
         alt = _normalized_text(raw_alt)
         role = _normalized_text(image.get("role")).casefold()
         aria_hidden = _normalized_text(image.get("aria-hidden")).casefold() == "true"
-        decorative = has_alt and not alt or role in {"presentation", "none"} or aria_hidden
+        src = _normalized_text(image.get('src'))
+        parsed_src = urlsplit(urljoin(checked_url, src))
+        # Only known tracking endpoints or explicitly 1x1 images. Do not
+        # suppress real images merely because their URL contains 'pixel'.
+        tracking = ((str(image.get('width', '')).strip() == '1'
+                     and str(image.get('height', '')).strip() == '1')
+                    or (parsed_src.hostname in {'www.facebook.com', 'facebook.com'}
+                        and parsed_src.path.rstrip('/') == '/tr'))
+        decorative = has_alt and not alt or role in {"presentation", "none"} or aria_hidden or tracking
         image_signal = {
             "index": index,
             "src": _normalized_text(image.get("src")),
@@ -1232,7 +1240,7 @@ def audit_page(url: str, html: str, source: Any = None) -> dict[str, Any]:
             "decorative": decorative,
         }
         images.append(image_signal)
-        if not has_alt and role not in {"presentation", "none"} and not aria_hidden:
+        if not has_alt and not decorative:
             findings.append(
                 _finding(
                     checked_url,

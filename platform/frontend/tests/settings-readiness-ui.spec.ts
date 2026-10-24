@@ -57,6 +57,10 @@ async function installSettingsMocks(page: Page, options: { connections?: unknown
     if (path === '/settings') return json(route, { global_pause: true })
     if (path === '/sites/site-1' && request.method() === 'GET') return json(route, site)
     if (path === '/sites/site-1/connections') return json(route, { items: connections, total: connections.length })
+    if (path === '/sites/site-1/local-presence/services') return json(route, {
+      status: 'needs_profile_access', services: ['Collision repair'], remote_write_supported: false,
+      requirements: ['Preserve existing services'], sources: ['https://pilot.example/services/'],
+    })
     if (path === '/sites/site-1/authors' && request.method() === 'GET') return json(route, authorDiscovery)
     if (path === '/sites/site-1/pages') return json(route, { items: [], total: 0 })
     if (path === '/sites/site-1/budgets') return json(route, { reservations: { items: [], total: 0 } })
@@ -78,6 +82,15 @@ test('settings explains external setup work before automation is enabled', async
   await expect(page.getByText('Do not enable automation yet', { exact: true })).toBeVisible()
   await expect(page.getByText('Confirm HTTPS, the API, web app, queue, workers, scheduler, and browser worker are healthy on the deployment server. This page cannot verify those processes.', { exact: true })).toBeVisible()
   await expect(checklist.getByRole('link', { name: 'Configure connections' }).first()).toHaveAttribute('href', '/sites/site-1/settings/connections')
+})
+
+test('connections offers a manual service review without claiming automated Google writes', async ({ page }) => {
+  await installSettingsMocks(page)
+  await page.goto('/sites/site-1/settings/connections')
+  await expect(page.getByRole('heading', { name: 'Google Business Profile services' })).toBeVisible()
+  await expect(page.getByText('Collision repair', { exact: true })).toBeVisible()
+  await expect(page.getByText('Google service updates are not automated by this integration.', { exact: false })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open Google Business Profile' })).toHaveAttribute('href', 'https://business.google.com/locations')
 })
 
 test('settings blocks a monthly budget above the API ceiling before submission', async ({ page }) => {
