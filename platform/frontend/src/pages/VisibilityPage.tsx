@@ -9,7 +9,7 @@ import { ResourceStateView, useResource, useSiteId } from './shared'
 
 type VisibilityTab = 'observed' | 'imports' | 'settings'
 type VisibilitySourceKind = 'gsc' | 'ga4' | 'pagespeed' | 'dataforseo' | 'ai_sample'
-type ObservationBasis = 'lab' | 'field' | 'field_performance' | 'lab_and_field' | 'unknown'
+type ObservationBasis = 'lab' | 'field' | 'field_performance' | 'lab_and_field' | 'ai_sample' | 'unknown'
 
 type ObservationCategory = {
   key: ObservationBasis
@@ -45,6 +45,12 @@ const visibilitySources: Array<{ kind: string; label: string }> = [
 ]
 
 const observationCategories: Record<ObservationBasis, ObservationCategory> = {
+  ai_sample: {
+    key: 'ai_sample',
+    label: 'AI Response Sample',
+    description: 'A provider response for the tracked question; not consumer rankings, traffic or proof of visibility across all AI assistants.',
+    tone: 'teal',
+  },
   lab: {
     key: 'lab',
     label: 'Lab Performance',
@@ -118,6 +124,7 @@ function classifyMeasurement(measurement: Measurement): ObservationCategory {
     : ''
   const imported = source.includes('import') || source === 'owner_import' || kind === 'citation_import' || kind === 'legacy_import'
   if (imported) return observationCategories.unknown
+  if (kind === 'ai_sample' || kind === 'ai') return observationCategories.ai_sample
 
   if (context === 'both') return observationCategories.lab_and_field
   if (context === 'field_or_origin') return observationCategories.field_performance

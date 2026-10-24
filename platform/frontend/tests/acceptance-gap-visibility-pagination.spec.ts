@@ -14,9 +14,10 @@ test('visibility filters before paging and can reach older observations', async 
       requests.push(url.search)
       const offset = Number(url.searchParams.get('offset'))
       const filtered = url.searchParams.get('source') === 'gsc'
-      return json({ items: Array.from({ length: filtered || offset ? 1 : 200 }, (_, i) => ({
-        id: `${offset}-${i}`, kind: 'gsc', source: 'gsc', observed_at: new Date().toISOString(), data: { marker: filtered ? 'filtered-result' : offset ? 'older-result' : 'recent-result' },
-      })), total: filtered ? 1 : 201 })
+      const ai = url.searchParams.get('source') === 'ai_sample'
+      return json({ items: Array.from({ length: filtered || ai || offset ? 1 : 200 }, (_, i) => ({
+        id: `${offset}-${i}`, kind: ai ? 'ai_sample' : 'gsc', source: ai ? 'ai_sample' : 'gsc', observed_at: new Date().toISOString(), data: { marker: ai ? 'ai-result' : filtered ? 'filtered-result' : offset ? 'older-result' : 'recent-result' },
+      })), total: filtered || ai ? 1 : 201 })
     }
     return json({ items: [], total: 0 })
   })
@@ -31,4 +32,8 @@ test('visibility filters before paging and can reach older observations', async 
   expect(requests.at(-1)).toContain('source=gsc')
   expect(requests.at(-1)).toContain('offset=0')
   await expect(page.getByRole('button', { name: 'Next observations' })).toBeDisabled()
+  await page.getByLabel('Observation source', { exact: true }).selectOption('ai_sample')
+  await expect(page.getByRole('table')).toContainText('ai-result')
+  await expect(page.getByRole('table')).toContainText('AI Response Sample')
+  await expect(page.getByRole('table')).not.toContainText('Unknown / Imported')
 })
