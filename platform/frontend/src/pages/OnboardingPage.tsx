@@ -74,10 +74,10 @@ export function OnboardingPage() {
 
   return (
     <div className="onboarding-wrap">
-      <header className="onboarding-header"><div className="brand" style={{ padding: 0, color: 'var(--navy)' }}><span className="brand-mark">✦</span><span>FORGESEO</span></div><span className="text-small text-muted">Step 1 of 1 · Site setup</span></header>
+      <header className="onboarding-header"><div className="brand" style={{ padding: 0, color: 'var(--navy)' }}><span className="brand-mark">✦</span><span>JAZZB SEO</span></div><span className="text-small text-muted">Step 1 of 1 · Site setup</span></header>
       <main id="main-content" tabIndex={-1} className="onboarding-content">
         <Link className="button button-secondary button-sm" to="/sites">Back to Manage sites</Link>
-        <div className="onboarding-intro"><p className="eyebrow">Bring a site into focus</p><h1>Tell ForgeSEO what good work looks like.</h1><p>These facts stay close to every audit and editorial check. Start with what you know; you can refine it in Policies later.</p></div>
+        <div className="onboarding-intro"><p className="eyebrow">Bring a site into focus</p><h1>Tell Jazzb SEO what good work looks like.</h1><p>These facts stay close to every audit and editorial check. Start with what you know; you can refine it in Policies later.</p></div>
         {error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}
         <div className="onboarding-grid">
           <Panel className="onboarding-card">
@@ -103,7 +103,7 @@ export function OnboardingPage() {
                 <ChipInput label="Confirmed sources" values={form.confirmed_sources} onChange={(value) => update('confirmed_sources', value)} placeholder="https://example.com/about" hint="URLs or internal source labels you trust." />
               </div>
               <div className="divider" />
-              <div className="panel-header"><div><h2 className="panel-title">WordPress connection <span className="text-small text-muted">Optional</span></h2><p className="panel-subtitle">Save the connection now so ForgeSEO can verify authenticated inventory after setup. Leave both fields blank to connect later from Settings.</p></div></div>
+              <div className="panel-header"><div><h2 className="panel-title">WordPress connection <span className="text-small text-muted">Optional</span></h2><p className="panel-subtitle">Save the connection now so Jazzb SEO can verify authenticated inventory after setup. Leave both fields blank to connect later from Settings.</p></div></div>
               <div className="form-grid">
                 <Field label="WordPress username" hint="Use the WordPress user that is allowed to read and edit the intended site content."><input autoComplete="username" value={wordpress.username} onChange={(event) => setWordpress((current) => ({ ...current, username: event.target.value }))} placeholder="wp-editor" /></Field>
                 <Field label="Application password" hint="Sent to the API over the authenticated setup request and stored encrypted; it is never shown after saving."><input autoComplete="new-password" type="password" value={wordpress.application_password} onChange={(event) => setWordpress((current) => ({ ...current, application_password: event.target.value }))} placeholder="Paste the WordPress application password" /></Field>

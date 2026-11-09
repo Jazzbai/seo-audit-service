@@ -357,7 +357,7 @@ test('Microsoft Graph needs explicit owner scope review, sends one test only on 
   await graph.getByLabel('Confirm test email received').check()
   await graph.getByLabel('Receipt notes').fill('Received the test message in the configured mailbox.')
   await receiptButton.click()
-  await expect(graph).toContainText('This is an explicit recipient confirmation; ForgeSEO did not read the mailbox.')
+  await expect(graph).toContainText('This is an explicit recipient confirmation; Jazzb SEO did not read the mailbox.')
   expect(controls.receiptPosts).toEqual([{
     jobId: 'notification-job-1',
     body: { confirms_received: true, notes: 'Received the test message in the configured mailbox.' },

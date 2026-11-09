@@ -33,7 +33,7 @@ interface ConnectionField {
 interface ConnectionDefinition { kind: string; name: string; description: string; fields: ConnectionField[] }
 
 const CONNECTIONS: ConnectionDefinition[] = [
-  { kind: 'wordpress', name: 'WordPress', description: 'Inventory, content reads, and protected editorial writes.', fields: [{ key: 'username', label: 'Username', placeholder: 'wp-editor', target: 'credentials' }, { key: 'application_password', label: 'Application password', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'webhook_secret', label: 'Webhook secret', placeholder: 'Optional; leave blank to keep it unset', hint: 'Optional, site-scoped, and stored encrypted. Only needed when the optional ForgeSEO connector sends signed change notifications. Periodic polling continues without it.', secret: true, target: 'credentials' }] },
+  { kind: 'wordpress', name: 'WordPress', description: 'Inventory, content reads, and protected editorial writes.', fields: [{ key: 'username', label: 'Username', placeholder: 'wp-editor', target: 'credentials' }, { key: 'application_password', label: 'Application password', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'webhook_secret', label: 'Webhook secret', placeholder: 'Optional; leave blank to keep it unset', hint: 'Optional, site-scoped, and stored encrypted. Only needed when the optional Jazzb SEO connector sends signed change notifications. Periodic polling continues without it.', secret: true, target: 'credentials' }] },
   { kind: 'woocommerce', name: 'WooCommerce', description: 'Product editorial fields only; commercial fields remain protected.', fields: [{ key: 'consumer_key', label: 'Consumer key', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }, { key: 'consumer_secret', label: 'Consumer secret', placeholder: 'Leave blank to keep stored secret', secret: true, target: 'credentials' }] },
   { kind: 'gsc', name: 'Google Search Console', description: 'Search performance and verified property observations.', fields: [{ key: 'site_url', label: 'Property', placeholder: 'sc-domain:example.com', target: 'settings' }] },
   { kind: 'ga4', name: 'Google Analytics 4', description: 'Analytics observations through an authorized property.', fields: [{ key: 'property_id', label: 'Property ID', placeholder: '123456789', maxLength: 64, target: 'settings' }, { key: 'conversion_event_names', label: 'Conversion event names', placeholder: 'generate_lead, purchase', hint: 'Optional. Comma-separated GA4 event names to report as business conversions; up to 12 names. This does not create or change events in Google Analytics.', format: 'csv', maxItems: 12, itemMaxLength: 40, maxLength: 512, target: 'settings' }, { key: 'dimensions', label: 'Reporting dimensions', placeholder: 'date, eventName', hint: 'Optional. Comma-separated GA4 dimensions, up to 8. Include eventName when you need to compare conversion events; leave blank for the default date view.', format: 'csv', maxItems: 8, itemMaxLength: 64, maxLength: 512, target: 'settings' }, { key: 'metrics', label: 'Reporting metrics', placeholder: 'sessions, conversions', hint: 'Optional. Comma-separated GA4 metrics, up to 10. Include conversions for conversion-aware reporting; leave blank for the default sessions and users view.', format: 'csv', maxItems: 10, itemMaxLength: 64, maxLength: 512, target: 'settings' }] },
@@ -49,7 +49,7 @@ for (const definition of CONNECTIONS) {
     {key:'estimated_cost_cents',label:'Estimated request cost (cents)',placeholder:'Enter verified provider pricing',hint: definition.kind === 'ai' ? 'For OpenAI Responses web search, enter the estimate for one tracked question; the weekly reservation multiplies it by the question count.' : undefined,target:'settings'},
     {key:'max_cost_cents',label:'Maximum request cost (cents)',placeholder:'Reserved before each paid request',hint: definition.kind === 'ai' ? 'For OpenAI Responses web search, this is the maximum for one tracked question; the weekly reservation multiplies it by the question count.' : undefined,target:'settings'},
   )
-  if (definition.kind === 'ai') definition.fields.push({key:'model',label:'Model',placeholder:'Provider model ID',hint:'Choose a model enabled for your OpenAI project. ForgeSEO will not guess a model or spend until one is configured.',target:'settings'})
+  if (definition.kind === 'ai') definition.fields.push({key:'model',label:'Model',placeholder:'Provider model ID',hint:'Choose a model enabled for your OpenAI project. Jazzb SEO will not guess a model or spend until one is configured.',target:'settings'})
   if (definition.kind === 'smtp') definition.fields.push({key:'recipients',label:'Recipients',placeholder:'Comma-separated email addresses',target:'settings'})
 }
 
@@ -90,7 +90,7 @@ function connectionReadiness(connection?: Connection): { state: Exclude<Capabili
   const test = capabilityRecord(connection?.capabilities?.last_connection_test)
   const testStatus = typeof test.status === 'string' ? test.status.toLowerCase() : ''
   if (!connection || !status || ['needs_connection', 'revoked', 'disconnected'].includes(status)) {
-    return { state: 'needs connection', description: 'Connect this source before ForgeSEO can verify access.' }
+    return { state: 'needs connection', description: 'Connect this source before Jazzb SEO can verify access.' }
   }
   if (status === 'unsupported') {
     return { state: 'unsupported', description: 'This source is not supported for this site.' }
@@ -142,12 +142,12 @@ function wordpressNotificationCapability(connection?: Connection): CapabilitySum
   const plugins = capabilityRecord(capabilities.plugins)
   const forgeseo = capabilityRecord(plugins.forgeseo ?? capabilities.forgeseo_plugin)
   if (capabilityFlag(forgeseo, 'webhooks')) {
-    return { label: 'Targeted change notifications', state: 'automatic', description: 'The verified ForgeSEO connector can send signed change notifications for targeted checks. Periodic polling remains active as a fallback.' }
+    return { label: 'Targeted change notifications', state: 'automatic', description: 'The verified Jazzb SEO connector can send signed change notifications for targeted checks. Periodic polling remains active as a fallback.' }
   }
   if (capabilityFlag(forgeseo, 'detected')) {
-    return { label: 'Targeted change notifications', state: 'needs review', description: 'The ForgeSEO connector is present, but signed notifications are not advertised as available. Review its configuration; periodic polling continues.' }
+    return { label: 'Targeted change notifications', state: 'needs review', description: 'The Jazzb SEO connector is present, but signed notifications are not advertised as available. Review its configuration; periodic polling continues.' }
   }
-  return { label: 'Targeted change notifications', state: 'unsupported', description: 'The optional ForgeSEO connector is not installed or does not expose signed notifications. Periodic polling continues, so monitoring is not disabled.' }
+  return { label: 'Targeted change notifications', state: 'unsupported', description: 'The optional Jazzb SEO connector is not installed or does not expose signed notifications. Periodic polling continues, so monitoring is not disabled.' }
 }
 
 function wordpressResourceCoverage(connection?: Connection): CapabilitySummaryItem[] {
@@ -211,7 +211,7 @@ function wordpressResourceCoverage(connection?: Connection): CapabilitySummaryIt
 function connectionGate(connection?: Connection): CapabilitySummaryItem | null {
   const status = connection?.status?.toLowerCase()
   if (!connection || !status || ['needs_connection', 'revoked', 'disconnected'].includes(status)) {
-    return { label: 'Connection', state: 'needs connection', description: 'Connect this source before ForgeSEO can inspect its capabilities.' }
+    return { label: 'Connection', state: 'needs connection', description: 'Connect this source before Jazzb SEO can inspect its capabilities.' }
   }
   if (status === 'unsupported') {
     return { label: 'Connection', state: 'unsupported', description: 'This connection type is not supported for this site.' }
@@ -304,14 +304,14 @@ function woocommerceCapabilitySummary(connection?: Connection): CapabilitySummar
   const productSeoDetected = seoResources.length === 0 || seoResources.includes('product')
   const categorySeoDetected = seoResources.includes('category')
   if (productSeoDetected && capabilityFlag(seo, 'write') && capabilityList(seo, 'writable_fields').length > 0) {
-    items.push({ label: 'Product SEO metadata', state: 'automatic', description: 'Write only verified product titles and descriptions through the ForgeSEO connector.' })
+    items.push({ label: 'Product SEO metadata', state: 'automatic', description: 'Write only verified product titles and descriptions through the Jazzb SEO connector.' })
   } else if (productSeoDetected && capabilityFlag(seo, 'read')) {
     items.push({ label: 'Product SEO metadata', state: 'read-only', description: 'Read product SEO metadata; no approved product SEO write surface is available.' })
   } else {
     items.push({ label: 'Product SEO metadata', state: 'unsupported', description: 'Product SEO metadata needs the optional verified connector; category SEO remains review-only.' })
   }
   if (categorySeoDetected && capabilityFlag(seo, 'write') && capabilityList(seo, 'writable_fields').length > 0) {
-    items.push({ label: 'Category SEO metadata', state: 'automatic', description: 'Write only verified product-category titles and descriptions through the ForgeSEO connector.' })
+    items.push({ label: 'Category SEO metadata', state: 'automatic', description: 'Write only verified product-category titles and descriptions through the Jazzb SEO connector.' })
   } else if (categorySeoDetected && capabilityFlag(seo, 'read')) {
     items.push({ label: 'Category SEO metadata', state: 'read-only', description: 'Read product-category SEO metadata; no approved category SEO write surface is available.' })
   } else {
@@ -332,7 +332,7 @@ function googleCapabilitySummary(definition: ConnectionDefinition, connection?: 
   const test = capabilityRecord(connection?.capabilities?.last_connection_test)
   const testStatus = typeof test.status === 'string' ? test.status.toLowerCase() : ''
   let state: CapabilitySummaryItem['state'] = 'needs connection'
-  let description = 'Connect this site with Google before ForgeSEO can read this source.'
+  let description = 'Connect this site with Google before Jazzb SEO can read this source.'
   if (testStatus === 'pending' && status === 'needs_test') {
     state = 'needs review'
     description = 'Google authorization is complete. Property access verification is queued or running automatically.'
@@ -340,7 +340,7 @@ function googleCapabilitySummary(definition: ConnectionDefinition, connection?: 
     state = 'needs connection'
   } else if (status === 'connected' && testStatus === 'verified') {
     state = 'automatic'
-    description = `Read-only ${definition.name} access was verified. ForgeSEO can collect observations, but it cannot change provider data.`
+    description = `Read-only ${definition.name} access was verified. Jazzb SEO can collect observations, but it cannot change provider data.`
   } else if (DEGRADED_CONNECTION_STATUSES.includes(testStatus) || DEGRADED_CONNECTION_STATUSES.includes(status ?? '')) {
     state = 'degraded'
     description = 'The last provider check failed. Review the property and authorization, then run the connection test again.'
@@ -943,7 +943,7 @@ function MigrationHistoryPanel() {
   const resource = useResource(loader, [siteId])
 
   return <Panel padded>
-    <div className="panel-header"><div><h2 className="panel-title">Migration history</h2><p className="panel-subtitle">A read-only record of historical evidence imported from an earlier ForgeSEO installation.</p></div><History size={19} color="#148b89" /></div>
+    <div className="panel-header"><div><h2 className="panel-title">Migration history</h2><p className="panel-subtitle">A read-only record of historical evidence imported from an earlier platform installation.</p></div><History size={19} color="#148b89" /></div>
     <Notice kind="info" title="Historical evidence only">Imported approvals do not grant current permissions. Fresh inventory is required before current decisions or automation; this panel never authorizes a write or means the site is optimized.</Notice>
     <div style={{ marginTop: 14 }}><ResourceStateView resource={resource} empty={<ErrorState message="No migration history response was returned. Retry the read before relying on this evidence." onRetry={() => void resource.reload()} />}>
       {(data) => <MigrationHistoryContent value={data} />}

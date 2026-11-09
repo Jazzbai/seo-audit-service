@@ -100,7 +100,7 @@ function Sidebar({ siteId, open, closeMenu }: { siteId: string; open: boolean; c
     <>
       {open && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={closeMenu} />}
       <aside className={`sidebar ${open ? 'open' : ''}`} aria-label="Primary navigation">
-        <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="brand" onClick={closeMenu}><span className="brand-mark">✦</span><span>FORGESEO</span></Link>
+        <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="brand" onClick={closeMenu}><span className="brand-mark">✦</span><span>JAZZB SEO</span></Link>
         <SiteSwitcher siteId={siteId} closeMenu={closeMenu} />
         <nav className="sidebar-nav" aria-label="Primary navigation">
           {sections.map((section, index) => <div key={section.label ?? index}>
@@ -141,7 +141,7 @@ export function AppShell() {
       <div className="main-shell">
         <header className="mobile-topbar">
           <button className="icon-button" type="button" onClick={() => setMenuOpen(true)} aria-label="Open navigation"><Menu size={20} /></button>
-          <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="mobile-brand"><span className="brand-mark">✦</span>FORGESEO</Link>
+          <Link to={siteId ? `/sites/${siteId}/overview` : '/sites'} className="mobile-brand"><span className="brand-mark">✦</span>JAZZB SEO</Link>
           <Link className="icon-button" to={siteId ? `/sites/${siteId}/settings/connections` : '/sites'} aria-label={siteId ? 'Open settings' : 'Manage sites'}><Settings2 size={18} /></Link>
         </header>
         <main id="main-content" className="content-wrap wide">

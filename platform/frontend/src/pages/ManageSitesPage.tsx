@@ -76,7 +76,7 @@ export function ManageSitesPage() {
             : <Button variant="ghost" disabled={!!busyId} onClick={() => setConfirmId(site.id)}><Archive size={15} />Archive site</Button>)}
         </div>
         {confirmId === site.id && <div className="site-archive-confirm" role="group" aria-label={`Archive ${site.name}`}>
-          <p>Archive {site.name}? This stops monitoring and cancels queued work. Your website stays online and its ForgeSEO history is saved. You can restore it later.</p>
+          <p>Archive {site.name}? This stops monitoring and cancels queued work. Your website stays online and its Jazzb SEO history is saved. You can restore it later.</p>
           <div className="managed-site-actions"><Button variant="danger" disabled={!!busyId} onClick={() => void changeArchive(site, true)}>{busyId === site.id ? 'Archiving…' : 'Confirm archive'}</Button><Button variant="secondary" disabled={!!busyId} onClick={() => setConfirmId(null)}>Keep site</Button></div>
         </div>}
       </Panel>)}</div>}

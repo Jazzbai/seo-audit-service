@@ -236,7 +236,7 @@ for (const width of widths) {
 }
 
 for (const { path, initialized, heading } of [
-  { path: '/login', initialized: true, heading: 'Sign in to ForgeSEO' },
+  { path: '/login', initialized: true, heading: 'Sign in to Jazzb SEO' },
   { path: '/bootstrap', initialized: false, heading: 'Create the first owner account' },
 ]) {
   for (const width of [1440, 390]) {

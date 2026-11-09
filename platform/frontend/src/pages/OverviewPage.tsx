@@ -391,7 +391,7 @@ function wordpressSignal(overview: Overview): MonitoringSignal {
   const connectionStatus = normalizedStatus(connection?.status)
   if (connectionStatus === 'unsupported') return { label: 'WordPress change checks', state: 'unsupported', description: 'This WordPress connection cannot provide the current change-monitoring capability.' }
   if (!connection || ['needs_connection', 'not_connected', 'needs_test', 'disconnected', 'revoked'].includes(connectionStatus)) {
-    return { label: 'WordPress change checks', state: 'needs_connection', description: 'Connect and verify WordPress before ForgeSEO can monitor authenticated changes.' }
+    return { label: 'WordPress change checks', state: 'needs_connection', description: 'Connect and verify WordPress before Jazzb SEO can monitor authenticated changes.' }
   }
   if (['failed', 'failure', 'error'].includes(connectionStatus)) return { label: 'WordPress change checks', state: 'failure', description: 'The WordPress connection reported an error. Review the connection before relying on change checks.' }
   if (connectionStatus !== 'connected') return { label: 'WordPress change checks', state: 'needs_review', description: 'The WordPress connection has not reached a verified connected state.' }
@@ -475,7 +475,7 @@ function FullCycleResultsPanel({ result }: { result: FullCycleResult }) {
         <div className="panel-header">
           <div>
             <p className="eyebrow">Latest full cycle</p>
-            <h2 className="panel-title" id="full-cycle-results-title">What ForgeSEO found and what happens next</h2>
+            <h2 className="panel-title" id="full-cycle-results-title">What Jazzb SEO found and what happens next</h2>
             <p className="panel-subtitle">This result stays visible after the job finishes so your team can act on the recorded coverage.</p>
           </div>
           <Badge value={isComplete ? 'Complete' : 'Partial / needs review'} />
@@ -836,7 +836,7 @@ export function OverviewPage() {
           <div className="divider" /><div className="notice notice-info"><ShieldCheck size={16} /><div>Actions remain subject to the active policy, protected paths, and the global pause.</div></div>
         </Panel>
       </div>
-      <div className="overview-section"><div className="section-heading"><h2>Connections</h2><Link to={`/sites/${siteId}/settings/connections`}>Manage connections <ArrowUpRight size={13} style={{ verticalAlign: 'middle' }} /></Link></div><div className="connection-list">{overview.connections.length ? overview.connections.map((connection) => <div className="connection-chip" key={connection.kind}><div><div className="connection-chip-name">{connection.kind === 'gsc' ? 'Search Console' : connection.kind === 'ga4' ? 'Google Analytics' : connection.kind === 'ai' ? 'AI provider' : connection.kind}</div><div className="connection-chip-status">{connection.checked_at ? `Checked ${formatDateTime(connection.checked_at)}` : 'No check recorded'}</div></div><Badge value={connection.status} /></div>) : <Panel><EmptyState icon={<PlugIcon />} title="No connections yet" description="Add the source your next workflow needs. ForgeSEO will keep the rest in a needs-connection state." action={<Link to={`/sites/${siteId}/settings/connections`} className="button button-secondary button-sm">Open connections</Link>} /></Panel>}</div></div>
+      <div className="overview-section"><div className="section-heading"><h2>Connections</h2><Link to={`/sites/${siteId}/settings/connections`}>Manage connections <ArrowUpRight size={13} style={{ verticalAlign: 'middle' }} /></Link></div><div className="connection-list">{overview.connections.length ? overview.connections.map((connection) => <div className="connection-chip" key={connection.kind}><div><div className="connection-chip-name">{connection.kind === 'gsc' ? 'Search Console' : connection.kind === 'ga4' ? 'Google Analytics' : connection.kind === 'ai' ? 'AI provider' : connection.kind}</div><div className="connection-chip-status">{connection.checked_at ? `Checked ${formatDateTime(connection.checked_at)}` : 'No check recorded'}</div></div><Badge value={connection.status} /></div>) : <Panel><EmptyState icon={<PlugIcon />} title="No connections yet" description="Add the source your next workflow needs. Jazzb SEO will keep the rest in a needs-connection state." action={<Link to={`/sites/${siteId}/settings/connections`} className="button button-secondary button-sm">Open connections</Link>} /></Panel>}</div></div>
       </>
     }}
   </ResourceStateView>

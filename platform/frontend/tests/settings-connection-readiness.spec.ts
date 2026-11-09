@@ -87,5 +87,5 @@ test('connection settings expose accessible readiness states and a degraded reco
   await expect(wordpress.getByText('The latest WordPress check did not report content-type coverage. Page reading alone does not prove that the whole site inventory is complete.', { exact: true })).toBeVisible()
   await expect(ga4.getByText('Credentials or authorization are present, but access is not verified yet. Run Test before relying on this source.', { exact: true })).toBeVisible()
   await expect(woocommerce.getByText('This source is not supported for this site.', { exact: true })).toBeVisible()
-  await expect(ai.getByText('Connect this source before ForgeSEO can verify access.', { exact: true })).toBeVisible()
+  await expect(ai.getByText('Connect this source before Jazzb SEO can verify access.', { exact: true })).toBeVisible()
 })

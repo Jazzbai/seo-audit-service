@@ -99,7 +99,7 @@ test('Store preserves empty inventory while clearly asking for a WooCommerce con
   await page.goto(`${appUrl}/sites/site-1/store`)
 
   await expect(page.getByText('WooCommerce: Needs Connection', { exact: true })).toBeVisible()
-  await expect(page.getByText('Connect WooCommerce before ForgeSEO can verify live catalog access.')).toBeVisible()
+  await expect(page.getByText('Connect WooCommerce before Jazzb SEO can verify live catalog access.')).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No store records yet', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No store findings recorded', exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'No store opportunities yet', exact: true })).toBeVisible()

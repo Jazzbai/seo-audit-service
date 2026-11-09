@@ -8,11 +8,11 @@ import { detailMessage } from '../lib/api'
 function AuthAside({ bootstrap }: { bootstrap?: boolean }) {
   return (
     <aside className="auth-aside">
-      <div className="auth-brand"><Link to="/" className="brand"><span className="brand-mark">✦</span><span>FORGESEO</span></Link></div>
+      <div className="auth-brand"><Link to="/" className="brand"><span className="brand-mark">✦</span><span>JAZZB SEO</span></Link></div>
       <div className="auth-quote">
         <div className="auth-quote-mark">“</div>
         <h1>Organic growth, with a conscience.</h1>
-        <p>ForgeSEO gives your team a careful operating system for finding, reviewing, and publishing useful work.</p>
+        <p>Jazzb SEO gives your team a careful operating system for finding, reviewing, and publishing useful work.</p>
       </div>
       <div className="auth-aside-footer">{bootstrap ? 'A calm start for your first site.' : 'Built for teams who want their safeguards visible.'}</div>
     </aside>
@@ -47,7 +47,7 @@ export function LoginPage() {
       <main id="main-content" className="auth-main" tabIndex={-1}>
         <div className="auth-card">
           <p className="eyebrow">Welcome back</p>
-          <h2>Sign in to ForgeSEO</h2>
+          <h2>Sign in to Jazzb SEO</h2>
           <p className="auth-card-intro">Keep your organic work moving without losing sight of the guardrails.</p>
           {error && <div className="mb-20"><Notice kind="error">{error}</Notice></div>}
           <form className="auth-form" onSubmit={submit}>
@@ -100,7 +100,7 @@ export function BootstrapPage() {
             <Field label="Workspace name" required><input value={form.team_name} onChange={(event) => update('team_name', event.target.value)} required placeholder="Northstar growth team" /></Field>
             <Field label="Password" hint="Use at least 8 characters." required><input type="password" minLength={8} value={form.password} onChange={(event) => update('password', event.target.value)} autoComplete="new-password" required placeholder="A secure password" /></Field>
             <Field label="Deployment setup token" hint="Your server administrator set this in the private deployment environment. It is used only for this first-owner setup; regular sign-in never asks for it." required><input type="password" value={form.bootstrap_token} onChange={(event) => update('bootstrap_token', event.target.value)} autoComplete="off" required placeholder="Paste the one-time setup token" /></Field>
-            <div className="notice notice-info"><ShieldCheck size={17} aria-hidden="true" /><div>ForgeSEO starts with global automation paused and asks for connection details only when a workflow needs them.</div></div>
+            <div className="notice notice-info"><ShieldCheck size={17} aria-hidden="true" /><div>Jazzb SEO starts with global automation paused and asks for connection details only when a workflow needs them.</div></div>
             <div className="form-actions"><Button size="lg" type="submit" disabled={submitting}>{submitting ? 'Creating workspace…' : 'Create workspace'}<ArrowRight size={17} /></Button></div>
           </form>
           <p className="auth-switch"><CheckCircle2 size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} /> Already have access? <Link to="/login">Sign in</Link></p>

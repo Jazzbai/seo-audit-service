@@ -503,7 +503,7 @@ export function WeeklyReportPage() {
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = 'forgeseo-weekly-report.csv'
+      anchor.download = 'jazzb-seo-weekly-report.csv'
       anchor.click()
       URL.revokeObjectURL(url)
     } catch (error) { setDownloadError(detailMessage(error)) }

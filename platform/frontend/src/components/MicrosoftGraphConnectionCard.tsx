@@ -319,7 +319,7 @@ export function MicrosoftGraphConnectionCard({ connection, siteId, canEdit, onCh
       {currentScopeReview && !scopeReviewExpired && <Notice kind="info" title="Owner attestation recorded">Mailbox scope was reviewed by an owner on {formatDateTime(currentScopeReview.reviewed_at, 'an unknown date')} and expires {reviewExpiry ? formatDateTime(reviewExpiry.toISOString()) : 'after 7 days'}. This is not machine verification.</Notice>}
       {currentScopeReview && scopeReviewExpired && <Notice kind="warning" title="Owner attestation expired">The seven-day mailbox scope attestation expired. An owner must review the connected configuration again.</Notice>}
       {!currentScopeReview && <Notice kind="warning" title="Mailbox scope needs owner review">Only an owner can configure Graph, attest to mailbox scope, send one test message, or record receipt.</Notice>}
-      <Notice kind="info">Authentication status does not establish message delivery. ForgeSEO does not read the mailbox.</Notice>
+      <Notice kind="info">Authentication status does not establish message delivery. Jazzb SEO does not read the mailbox.</Notice>
     </> : <form className="stack-sm" onSubmit={(event) => void save(event)}>
       <div className="connection-fields">
         <Field label="Tenant ID"><input aria-label="Tenant ID" value={form.tenant_id} onChange={(event) => update('tenant_id', event.target.value)} autoComplete="off" /></Field>
@@ -382,7 +382,7 @@ export function MicrosoftGraphConnectionCard({ connection, siteId, canEdit, onCh
             {working === 'receipt' ? 'Recording receipt…' : 'Record owner receipt confirmation'}
           </Button>
         </>}
-        {receivedConfirmation && <Notice kind="success" title="Owner receipt confirmation recorded">The API recorded recipient_confirmation confirmed with an owner_confirmed_recipient_receipt. This is an explicit recipient confirmation; ForgeSEO did not read the mailbox.</Notice>}
+        {receivedConfirmation && <Notice kind="success" title="Owner receipt confirmation recorded">The API recorded recipient_confirmation confirmed with an owner_confirmed_recipient_receipt. This is an explicit recipient confirmation; Jazzb SEO did not read the mailbox.</Notice>}
         {(notificationStatus === 'failed' || notificationStatus === 'blocked') && <p className="text-small text-muted" style={{ margin: 0 }}>Review the job result before requesting a new one-message test.</p>}
       </div>}
     </form>}
