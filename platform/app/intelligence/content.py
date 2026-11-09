@@ -801,6 +801,12 @@ def business_topic_matches(topic: str, facts: dict[str, Any]) -> bool:
     if not offerings:
         return False
     known = " ".join([_normalized_text(facts.get("business_name")), *offerings]).casefold()
+    # Rating-like discovery phrases and unrelated numeric business names do
+    # not establish an informational topic, even when they contain "dental".
+    compact_known = re.sub(r'[^a-z0-9]', '', known)
+    for phrase in re.findall(r'\b\d+\s*[- ]?\s*stars?\b', topic.casefold()):
+        if re.sub(r'[^a-z0-9]', '', phrase) not in compact_known:
+            return False
     # Unknown alphanumeric brand fragments (a1, 1stop, etc.) are not a service.
     if any(token not in known.split() for token in re.findall(r'\b(?:[a-z]+\d\w*|\d+[a-z]\w*)\b', topic.casefold())):
         return False
