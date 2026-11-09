@@ -2080,6 +2080,11 @@ class WordPressClient(AsyncConnector):
             return False
         if expected_body is not None and str(record.get("body", "")) != str(expected_body):
             return False
+        if 'categories' in article:
+            raw = record.get('raw') if isinstance(record.get('raw'), Mapping) else {}
+            actual = raw.get('categories')
+            if not isinstance(actual, list) or any(type(value) is not int for value in actual) or set(actual) != set(article['categories']):
+                return False
         return True
 
     async def _reconcile_create(
@@ -2192,6 +2197,34 @@ class WordPressClient(AsyncConnector):
         operation_key = operation_key_header(operation_key)
         _, slug = self._article_payload(article, operation_key)
         return await self._reconcile_create(article, operation_key, slug)
+
+    async def verify_post_categories(self, category_ids: list[int], root_id: int | None = None) -> None:
+        """Require current category ancestry before publishing a restricted post."""
+        await self._ensure_ready()
+        observed = {}
+        for category_id in category_ids:
+            current = category_id
+            seen = set()
+            for _ in range(20):
+                if current in seen:
+                    raise ConnectorError('WordPress category ancestry contains a cycle')
+                seen.add(current)
+                if current not in observed:
+                    payload, _ = await self._json_request('GET', self._wp_path(f'wp/v2/categories/{current}'))
+                    if not isinstance(payload, Mapping) or payload.get('id') != current:
+                        raise ConnectorError('WordPress category could not be verified')
+                    parent = payload.get('parent')
+                    if isinstance(parent, bool) or not isinstance(parent, int) or parent < 0:
+                        raise ConnectorError('WordPress category parent could not be verified')
+                    observed[current] = parent
+                parent = observed[current]
+                if root_id is None or parent == root_id:
+                    break
+                if current == root_id or parent == 0:
+                    raise ConnectorError('Publication category is outside the approved parent category')
+                current = parent
+            else:
+                raise ConnectorError('WordPress category ancestry exceeds the verification limit')
 
     def matches_snapshot(self, current: Mapping[str, Any], snapshot: Mapping[str, Any], *, ignore_status: bool = False) -> bool:
         """Compare managed source fields, excluding volatile render/date hints."""

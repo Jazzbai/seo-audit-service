@@ -1167,7 +1167,7 @@ async def availability(db, site, job):
     if failed:
         if row is None:
             row = incident(db, site, 'availability', 'Site availability check failed', kind='availability')
-        row.failure_count += 1
+        row.failure_count = (row.failure_count or 0) + 1
         row.status = 'open' if row.failure_count >= 2 else 'confirming'
         row.last_seen_at = now()
         row.details = {'status_code':status}
@@ -1178,7 +1178,7 @@ async def availability(db, site, job):
             event(db, site, 'outage_resolved', 'Site availability recovered')
         row.status, row.failure_count, row.resolved_at = 'resolved', 0, now()
     db.add(Measurement(site_id=site.id, kind='availability', source='http_probe', data={'status_code':status}, observed_at=now()))
-    return {'available':not failed,'status_code':status,'confirmed':bool(row and row.failure_count >= 2)}
+    return {'available':not failed,'status_code':status,'confirmed':bool(row and (row.failure_count or 0) >= 2)}
 
 
 async def targeted_audit(db,site,job):
@@ -1677,6 +1677,11 @@ def _content_autopilot_preflight(db, site) -> dict[str, Any]:
     ))
     if policy and policy.settings.get('publication_article_ids') is not None:
         blockers.append('restricted_publication_scope')
+    if policy:
+        try:
+            publication_categories(policy, SimpleNamespace(brief={}))
+        except ValueError:
+            blockers.append('publication_categories_required')
     wordpress = find_connection(db, site.id, 'wordpress')
     wordpress_credentials = False
     if wordpress is None or wordpress.status == 'revoked' or not wordpress.encrypted_credentials:
@@ -2662,15 +2667,18 @@ def _publication_requires_reconciliation(row: Publication) -> bool:
     )
 
 
-def _publication_article_payload(article: Article) -> dict[str, Any]:
+def _publication_article_payload(article: Article, categories=None) -> dict[str, Any]:
     """Build the bounded editorial payload used by read-only draft lookup."""
 
-    return {
+    payload = {
         'title': article.title,
         'body': article.body or '',
         'slug': article.slug,
         'author_id': article.author_id,
     }
+    if categories is not None:
+        payload['categories'] = categories
+    return payload
 
 
 def _publication_article_matches_snapshot(article: Article, snapshot: dict[str, Any] | None) -> bool:
@@ -2898,7 +2906,7 @@ async def reconcile_publication(db, site, job):
                 current = await client.read(f'posts:{publication.remote_id}')
             else:
                 current = await client.reconcile_draft(
-                    _publication_article_payload(article),
+                    _publication_article_payload(article, snapshot.get('publication_categories')),
                     publication.operation_key,
                 )
     except ResourceNotFound:
@@ -3023,6 +3031,41 @@ async def reconcile_publication(db, site, job):
     )
 
 
+def publication_categories(policy, article):
+    """Resolve explicit post categories; a restricted policy never uses WP defaults."""
+    settings = policy.settings
+    allowed = settings.get('publication_category_ids')
+    if allowed is None:
+        return None
+    brief = article.brief if isinstance(article.brief, dict) else {}
+    selected = brief.get('categories')
+    if selected is None:
+        default = settings.get('publication_default_category_id')
+        selected = [default] if default is not None else (allowed if len(allowed) == 1 else [])
+    if not isinstance(selected, list) or not selected or len(selected) > 50 or any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0 or value not in allowed
+        for value in selected
+    ):
+        raise ValueError('Article categories must be explicitly selected from the approved publication categories')
+    return list(dict.fromkeys(selected))
+
+
+async def verify_publication_categories(client, policy, categories, source=None):
+    allowed = policy.settings.get('publication_category_ids')
+    if categories is None:
+        if allowed is not None:
+            raise ValueError('Publication category policy changed; review this article before publishing')
+        return
+    if allowed is not None and not set(categories).issubset(allowed):
+        raise ValueError('Publication categories are no longer approved')
+    await client.verify_post_categories(categories, policy.settings.get('publication_category_root_id'))
+    if source is not None:
+        raw = source.get('raw') if isinstance(source.get('raw'), dict) else {}
+        actual = raw.get('categories')
+        if not isinstance(actual, list) or any(type(value) is not int for value in actual) or set(actual) != set(categories):
+            raise ValueError('WordPress post categories do not match the approved publication categories')
+
+
 def publication_target(site, article, source=None):
     """Resolve a new post's policy target without treating a draft preview as its permalink.
 
@@ -3079,6 +3122,7 @@ async def publish(db, site, job):
     # article target; neither path is allowed to open the connector.
     authorize(db, site, 'publish')
     policy = authorize(db, site, 'publish', publication_target(site, article))
+    categories = publication_categories(policy, article)
     op_key = f'publish:{site.id}:{article.id}'
     pub = publication(db, site, op_key, policy, article=article)
     if pub.status == 'published':
@@ -3108,16 +3152,22 @@ async def publish(db, site, job):
         captured=pub.snapshot['article']
         if any(captured.get(key)!=getattr(article,key) for key in ('title','body','slug','author_id')):
             raise ValueError('The article changed during publication; reconcile the earlier attempt first')
+    if 'publication_categories' in pub.snapshot and pub.snapshot['publication_categories'] != categories:
+        raise ValueError('Publication categories changed; reconcile the earlier attempt first')
     pub.snapshot = {**pub.snapshot,'article':record(article),'authorization':{'type':'policy','version':policy.version}}
+    if categories is not None:
+        pub.snapshot = {**pub.snapshot, 'publication_categories': categories}
     article.status, pub.status = 'publishing','publishing'
     db.commit()
     async with await client_for(db, site) as client:
         try:
-            authorize(db, site, 'publish', publication_target(site, article))
+            policy = authorize(db, site, 'publish', publication_target(site, article))
+            await verify_publication_categories(client, policy, categories)
             if pub.remote_id:
                 draft = await client.read('posts:' + pub.remote_id)
             else:
-                draft_payload={'title':article.title,'body':article.body,'slug':article.slug,'author_id':author}
+                draft_payload=_publication_article_payload(article, categories)
+                draft_payload['author_id'] = author
                 if pub.snapshot.get('create_started'):
                     draft=await client.reconcile_draft(draft_payload,op_key)
                 else:
@@ -3130,7 +3180,8 @@ async def publish(db, site, job):
                 article.remote_id = pub.remote_id
                 pub.snapshot = {**pub.snapshot,'draft':draft}
                 db.commit()
-            authorize(db, site, 'publish', publication_target(site, article, draft))
+            policy = authorize(db, site, 'publish', publication_target(site, article, draft))
+            await verify_publication_categories(client, policy, categories, draft)
             captured_draft=pub.snapshot.get('draft')
             if not captured_draft or not client.matches_snapshot(draft,captured_draft,ignore_status=True):
                 raise SourceConflict(captured_draft.get('source_hash') if captured_draft else 'missing_snapshot',draft['source_hash'],resource_key=draft['resource_key'])
@@ -3138,7 +3189,8 @@ async def publish(db, site, job):
                 raise SourceConflict('draft_or_publish',draft.get('status'),resource_key=draft['resource_key'])
             if draft.get('status') != 'publish':
                 await require_current_author(client, author)
-                authorize(db, site, 'publish', publication_target(site, article, draft))
+                policy = authorize(db, site, 'publish', publication_target(site, article, draft))
+                await verify_publication_categories(client, policy, categories, draft)
                 await client.publish(
                     pub.remote_id,
                     expected_hash=draft['source_hash'],
@@ -3147,6 +3199,7 @@ async def publish(db, site, job):
             article.status, pub.status = 'verifying','verifying'
             db.commit()
             source = await client.read('posts:' + pub.remote_id)
+            await verify_publication_categories(client, policy, categories, source)
             response = await fetch(source['url'])
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(response['html'],'html.parser')

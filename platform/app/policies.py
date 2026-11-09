@@ -38,6 +38,9 @@ DEFAULT_POLICY: dict[str, Any] = {
     "author_id": None,
     # None preserves unrestricted-by-ID legacy behavior; [] permits no article.
     "publication_article_ids": None,
+    "publication_category_ids": None,
+    "publication_category_root_id": None,
+    "publication_default_category_id": None,
 }
 
 _MAX_LIST_ITEMS = {
@@ -96,6 +99,23 @@ def _validated_settings(settings_dict: dict[str, Any] | None) -> dict[str, Any]:
         if action not in normalized_actions:
             normalized_actions.append(action)
     settings["allowed_actions"] = normalized_actions
+
+    categories = settings.get('publication_category_ids')
+    if categories is not None:
+        if not isinstance(categories, list) or len(categories) > 50 or any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0 for value in categories
+        ):
+            raise ValueError('publication_category_ids must be null or up to 50 positive category IDs')
+        settings['publication_category_ids'] = list(dict.fromkeys(categories))
+    for key in ('publication_category_root_id', 'publication_default_category_id'):
+        value = settings.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+            raise ValueError(f'{key} must be null or a positive category ID')
+        if value is not None and categories is None:
+            raise ValueError(f'{key} requires publication_category_ids')
+    default_category = settings.get('publication_default_category_id')
+    if default_category is not None and default_category not in (categories or []):
+        raise ValueError('publication_default_category_id must be an allowed category')
 
     article_ids = settings.get('publication_article_ids')
     if article_ids is not None:

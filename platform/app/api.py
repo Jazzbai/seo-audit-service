@@ -661,6 +661,28 @@ def local_presence_services(site_id: str, ctx=Depends(require_user), db=Depends(
     return service_plan(site)
 
 
+@router.get('/sites/{site_id}/google-properties/{kind}')
+async def google_property_choices(site_id: str, kind: str, response: Response,
+                                  ctx=Depends(require_user), db=Depends(get_db)):
+    guard(db, ctx, site_id, owner=True)
+    if kind not in {'gsc', 'ga4'}:
+        raise HTTPException(422, 'Unsupported Google property source')
+    from app.operations import credentials
+    from app.google_properties import discover_properties, GooglePropertyError
+    try:
+        secret, config = credentials(db, site_id, kind)
+    except ValueError:
+        raise HTTPException(409, 'Connect this site with Google before listing properties') from None
+    try:
+        result = await discover_properties(kind, secret, config)
+    except GooglePropertyError as exc:
+        raise HTTPException(502, str(exc)) from None
+    except Exception:
+        raise HTTPException(502, 'Google property discovery is temporarily unavailable') from None
+    response.headers['Cache-Control'] = 'no-store'
+    return result
+
+
 @router.get('/sites/{site_id}/google-oauth/config')
 def google_oauth_config(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
     guard(db, ctx, site_id)

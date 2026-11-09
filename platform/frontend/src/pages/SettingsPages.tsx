@@ -472,6 +472,40 @@ function GoogleOAuthControl({ definition, siteId, canEdit }: { definition: Conne
   </div>
 }
 
+function GooglePropertyChoices({ kind, siteId, connection, value, onChange }: {
+  kind: string; siteId: string; connection?: Connection; value: string; onChange: (value: string) => void
+}) {
+  const [items, setItems] = useState<Array<{value: string; label: string}>>([])
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [complete, setComplete] = useState(true)
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    let active = true
+    setItems([]); setError('')
+    if (!connection || ['revoked', 'needs_connection'].includes(connection.status)) return
+    setLoading(true)
+    void connectionsApi.properties(siteId, kind).then(result => {
+      if (active) { setItems(result.items); setComplete(result.complete) }
+    }).catch(err => { if (active) setError(detailMessage(err)) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [siteId, kind, connection?.id, connection?.checked_at, retry])
+  if (!connection || ['revoked', 'needs_connection'].includes(connection.status)) return null
+  return <div className="stack-sm" style={{ marginBottom: 16 }}>
+    <Field label={`Available ${kind === 'ga4' ? 'Analytics' : 'Search Console'} properties`} hint="Choose the property for this website, then Save and Test. This does not change Google data.">
+      <select aria-label={`Available ${kind === 'ga4' ? 'Analytics' : 'Search Console'} properties`} value={items.some(item => item.value === value) ? value : ''} disabled={loading} onChange={event => { if (event.target.value) onChange(event.target.value) }}>
+        <option value="">{loading ? 'Loading properties…' : 'Select a Google property'}</option>
+        {items.map(item => <option key={item.value} value={item.value}>{item.label} ({item.value})</option>)}
+      </select>
+    </Field>
+    {error && <Notice kind="warning">{error} You can still enter the property below.</Notice>}
+    {!loading && !error && items.length === 0 && <p className="text-small text-muted">No properties were returned for this Google account. Check its access or enter the property below.</p>}
+    {!complete && <p className="text-small text-muted">This list is partial. You can enter another property below.</p>}
+    <Button type="button" variant="secondary" size="sm" disabled={loading} onClick={() => setRetry(value => value + 1)}>Reload Google properties</Button>
+  </div>
+}
+
 function ConnectionCard({ definition, connection, siteId, canEdit, onChanged, onError }: { definition: ConnectionDefinition; connection?: Connection; siteId: string; canEdit: boolean; onChanged: (message: string) => Promise<void>; onError: (message: string) => void }) {
   const [values, setValues] = useState<Record<string, string>>({})
   const [showSecrets, setShowSecrets] = useState<Record<string, boolean>>({})
@@ -541,7 +575,7 @@ function ConnectionCard({ definition, connection, siteId, canEdit, onChanged, on
     finally { setWorking(false) }
   }
   if (!canEdit) return <div className="connection-card"><div className="connection-card-header"><div><div className="connection-card-name">{definition.name}</div><div className="connection-card-description">{definition.description}</div></div></div><ConnectionReadinessSummary definition={definition} connection={connection} /><ConnectionCapabilitySummary definition={definition} connection={connection} /><Notice kind="warning">Owner access is required to edit this connection or submit a test.</Notice></div>
-  return <form className="connection-card" onSubmit={(event) => void save(event)}><div className="connection-card-header"><div><div className="connection-card-name">{definition.name}</div><div className="connection-card-description">{definition.description}</div></div></div><ConnectionReadinessSummary definition={definition} connection={connection} /><ConnectionCapabilitySummary definition={definition} connection={connection} /><div className="connection-fields">{definition.fields.map((field) => <Field key={field.key} label={field.label} hint={field.hint ?? (field.secret && connection && connection.status !== 'needs_connection' ? 'Stored securely · leave blank to keep it.' : undefined)}>{field.secret ? <div className="secret-field"><input aria-label={field.label} type={showSecrets[field.key] ? 'text' : 'password'} value={values[field.key] ?? ''} onChange={(event) => update(field.key, event.target.value)} placeholder={field.placeholder} autoComplete="off" /><button className="secret-toggle" type="button" onClick={() => setShowSecrets((current) => ({ ...current, [field.key]: !current[field.key] }))} aria-label={showSecrets[field.key] ? `Hide ${field.label}` : `Show ${field.label}`}>{showSecrets[field.key] ? <EyeOff size={16} /> : <Eye size={16} />}</button></div> : <input aria-label={field.label} type={field.type === 'checkbox' ? 'checkbox' : 'text'} checked={field.type === 'checkbox' ? values[field.key] !== 'false' : undefined} value={field.type === 'checkbox' ? undefined : values[field.key] ?? ''} onChange={(event) => update(field.key, field.type === 'checkbox' ? String(event.target.checked) : event.target.value)} placeholder={field.placeholder} />}</Field>)}</div>{testResult && <div className="notice notice-info" style={{ marginTop: 13 }}><Zap size={15} />{testResult}</div>}<div className="connection-actions"><button type="button" className="button button-ghost button-sm" onClick={() => void revoke()} disabled={working || !connection}><Trash2 size={14} /> Revoke</button><div className="connection-actions-right"><Button type="button" variant="secondary" size="sm" onClick={() => void test()} disabled={working || !connection}><PlugZap size={14} /> Test</Button><Button type="submit" size="sm" disabled={working}><Save size={14} /> Save</Button></div></div></form>
+  return <form className="connection-card" onSubmit={(event) => void save(event)}><div className="connection-card-header"><div><div className="connection-card-name">{definition.name}</div><div className="connection-card-description">{definition.description}</div></div></div><ConnectionReadinessSummary definition={definition} connection={connection} /><ConnectionCapabilitySummary definition={definition} connection={connection} />{(definition.kind === 'ga4' || definition.kind === 'gsc') && <GooglePropertyChoices kind={definition.kind} siteId={siteId} connection={connection} value={values[definition.kind === 'ga4' ? 'property_id' : 'site_url'] ?? ''} onChange={value => update(definition.kind === 'ga4' ? 'property_id' : 'site_url', value)} />}<div className="connection-fields">{definition.fields.map((field) => <Field key={field.key} label={field.label} hint={field.hint ?? (field.secret && connection && connection.status !== 'needs_connection' ? 'Stored securely · leave blank to keep it.' : undefined)}>{field.secret ? <div className="secret-field"><input aria-label={field.label} type={showSecrets[field.key] ? 'text' : 'password'} value={values[field.key] ?? ''} onChange={(event) => update(field.key, event.target.value)} placeholder={field.placeholder} autoComplete="off" /><button className="secret-toggle" type="button" onClick={() => setShowSecrets((current) => ({ ...current, [field.key]: !current[field.key] }))} aria-label={showSecrets[field.key] ? `Hide ${field.label}` : `Show ${field.label}`}>{showSecrets[field.key] ? <EyeOff size={16} /> : <Eye size={16} />}</button></div> : <input aria-label={field.label} type={field.type === 'checkbox' ? 'checkbox' : 'text'} checked={field.type === 'checkbox' ? values[field.key] !== 'false' : undefined} value={field.type === 'checkbox' ? undefined : values[field.key] ?? ''} onChange={(event) => update(field.key, field.type === 'checkbox' ? String(event.target.checked) : event.target.value)} placeholder={field.placeholder} />}</Field>)}</div>{testResult && <div className="notice notice-info" style={{ marginTop: 13 }}><Zap size={15} />{testResult}</div>}<div className="connection-actions"><button type="button" className="button button-ghost button-sm" onClick={() => void revoke()} disabled={working || !connection}><Trash2 size={14} /> Revoke</button><div className="connection-actions-right"><Button type="button" variant="secondary" size="sm" onClick={() => void test()} disabled={working || !connection}><PlugZap size={14} /> Test</Button><Button type="submit" size="sm" disabled={working}><Save size={14} /> Save</Button></div></div></form>
 }
 
 export function TeamPage() {

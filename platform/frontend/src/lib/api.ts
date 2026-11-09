@@ -186,6 +186,7 @@ export const sitesApi = {
 }
 
 export const connectionsApi = {
+  properties: (siteId: string, kind: string) => request<{items: Array<{value: string; label: string}>; complete: boolean}>(`/sites/${encode(siteId)}/google-properties/${encode(kind)}`),
   list: (siteId: string) => list<Connection>(`/sites/${encode(siteId)}/connections`),
   save: (siteId: string, kind: string, body: { credentials?: Record<string, unknown>; settings: Record<string, unknown> }) =>
     request<Connection>(`/sites/${encode(siteId)}/connections/${encode(kind)}`, { method: 'PUT', body }),
