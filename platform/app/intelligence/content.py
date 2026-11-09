@@ -811,7 +811,11 @@ def business_topic_matches(topic: str, facts: dict[str, Any]) -> bool:
     if any(token not in known.split() for token in re.findall(r'\b(?:[a-z]+\d\w*|\d+[a-z]\w*)\b', topic.casefold())):
         return False
     weak = {"auto", "car", "cars", "repair", "repairs", "service", "services", "shop", "shops",
-            "vehicle", "vehicles", "near", "me", "best", "overview"}
+            "vehicle", "vehicles", "near", "me", "best", "overview",
+            # An industry noun in a competing practice's name is not evidence
+            # that the query concerns one of this site's actual offerings.
+            "dental", "dentist", "dentists", "dentistry", "family", "care",
+            "clinic", "clinics", "practice", "practices", "group", "guide"}
     locations = set().union(*(_topic_tokens(value) for value in _string_items(facts.get("locations"))))
     def terms(value):
         return {token.rstrip('s') for token in _topic_tokens(value) - weak - locations}
