@@ -55,7 +55,6 @@ export function LoginPage() {
             <Field label="Password" required><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required placeholder="Your password" /></Field>
             <div className="form-actions"><Button className="button-wide" size="lg" type="submit" disabled={submitting}>{submitting ? 'Signing in…' : 'Sign in'}<ArrowRight size={17} /></Button></div>
           </form>
-          <p className="auth-switch">New workspace? <Link to="/bootstrap">Create the first owner account</Link></p>
         </div>
       </main>
     </div>

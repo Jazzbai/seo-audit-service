@@ -444,10 +444,15 @@ def _bootstrap_lock(db: DBSession) -> None:
 router = APIRouter(prefix="/api/v1")
 
 
+def _require_account_creation_enabled() -> None:
+    if not settings.ACCOUNT_CREATION_ENABLED:
+        raise HTTPException(status_code=403, detail="New account creation is disabled")
+
+
 @router.get("/auth/status")
 def auth_status(db: DBSession = Depends(get_db)) -> dict[str, bool]:
     initialized = db.scalar(select(User.id).limit(1)) is not None
-    return {"initialized": initialized}
+    return {"initialized": initialized, "account_creation_enabled": settings.ACCOUNT_CREATION_ENABLED}
 
 
 @router.post("/auth/bootstrap")
@@ -458,6 +463,7 @@ def bootstrap(
     db: DBSession = Depends(get_db),
 ) -> dict[str, Any]:
     _validate_same_origin(request)
+    _require_account_creation_enabled()
     email = _normalize_email(payload.email)
     name = _nonempty(payload.name, "name")
     team_name = _nonempty(payload.team_name, "team_name")
@@ -600,6 +606,7 @@ def add_member(
     db: DBSession = Depends(get_db),
 ) -> dict[str, Any]:
     require_role(context, "owner")
+    _require_account_creation_enabled()
     email = _normalize_email(payload.email)
     name = _nonempty(payload.name, "name")
 

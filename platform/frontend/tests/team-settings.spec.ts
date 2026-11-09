@@ -6,7 +6,7 @@ async function json(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installTeamMocks(page: Page, role: 'owner' | 'viewer' = 'owner') {
+async function installTeamMocks(page: Page, role: 'owner' | 'viewer' = 'owner', accountCreationEnabled = true) {
   const currentUser = role === 'owner'
     ? { id: 'user-1', email: 'owner@example.com', name: 'Owner' }
     : { id: 'user-2', email: 'viewer@example.com', name: 'Viewer' }
@@ -20,7 +20,7 @@ async function installTeamMocks(page: Page, role: 'owner' | 'viewer' = 'owner') 
     const url = new URL(request.url())
     const path = url.pathname.replace('/api/v1', '')
     const method = request.method()
-    if (path === '/auth/status') return json(route, { initialized: true })
+    if (path === '/auth/status') return json(route, { initialized: true, account_creation_enabled: accountCreationEnabled })
     if (path === '/auth/me') return json(route, { user: currentUser, team: { id: 'team-1', name: 'Pilot team' }, role, csrf_token: 'csrf-test-token' })
     if (path === '/sites' && method === 'GET') return json(route, { items: [site], total: 1 })
     if (path === '/team' && method === 'GET') return json(route, { team: { id: 'team-1', name: 'Pilot team' }, members })
@@ -69,4 +69,14 @@ test('viewer sees read-only team controls', async ({ page }) => {
   await expect(page.getByLabel('Name')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Add member' })).toBeDisabled()
   await expect(page.getByTitle('Remove this member')).toBeDisabled()
+})
+
+test('closed pilot hides account-creation fields even from the owner', async ({ page }) => {
+  const controls = await installTeamMocks(page, 'owner', false)
+  await page.goto('/sites/site-1/settings/team')
+  await expect(page.getByText('This platform is currently closed to new users.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add member' })).toHaveCount(0)
+  await expect(page.getByLabel('Temporary password')).toHaveCount(0)
+  await expect(page.getByLabel('Role for owner@example.com')).toBeDisabled()
+  expect(controls.changes).toEqual([])
 })

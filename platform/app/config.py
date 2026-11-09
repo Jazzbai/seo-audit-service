@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False
     GLOBAL_PAUSE: bool = True
     PUBLIC_URL: str = "http://localhost"
+    # Closed pilot: both first-owner setup and team additions require an
+    # explicit server-side opt-in. Existing users can still sign in.
+    ACCOUNT_CREATION_ENABLED: bool = False
     # Required by the deployment for the one-time first-owner bootstrap.
     # An empty local default fails closed; tests and disposable local servers
     # must set an explicit test-only value.

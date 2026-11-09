@@ -24,6 +24,7 @@ function PublicRoute() {
   const { pathname } = useLocation()
   if (status === 'loading') return <FullPageLoading />
   if (status === 'authenticated') return <Navigate to="/" replace />
+  if (pathname === '/bootstrap' && status !== 'uninitialized') return <Navigate to="/login" replace />
   if (status === 'uninitialized' && pathname !== '/bootstrap') return <Navigate to="/bootstrap" replace />
   return <Outlet />
 }

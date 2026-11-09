@@ -67,7 +67,7 @@ def main():
             ENCRYPTION_KEY=key, BROKER_URL='memory://',
             GLOBAL_PAUSE='true', COOKIE_SECURE='false',
             PUBLIC_URL='http://127.0.0.1:4173',
-            BOOTSTRAP_TOKEN='test-only-bootstrap-token',
+            BOOTSTRAP_TOKEN='test-only-bootstrap-token', ACCOUNT_CREATION_ENABLED='true',
             ARTIFACT_ROOT=str(Path(temp) / 'artifacts'),
         )
         from test_wordpress_live import configure, FixtureTransport, integration_stack

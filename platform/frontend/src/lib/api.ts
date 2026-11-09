@@ -342,6 +342,7 @@ export type AuthContextValue = {
   team: Team | null
   role: AuthPayload['role'] | null
   status: 'loading' | 'authenticated' | 'unauthenticated' | 'uninitialized'
+  accountCreationEnabled: boolean
   signIn: (email: string, password: string) => Promise<AuthPayload>
   bootstrap: (body: { email: string; password: string; name: string; team_name: string }, bootstrapToken: string) => Promise<AuthPayload>
   signOut: () => Promise<void>

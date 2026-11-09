@@ -13,7 +13,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='forgeseo-browser-test-') as temp:
         os.environ.update(DATABASE_URL='sqlite:///'+str(Path(temp)/'test.db').replace('\\','/'),
             ENCRYPTION_KEY=secrets.token_urlsafe(48),BROKER_URL='memory://',GLOBAL_PAUSE='true',COOKIE_SECURE='false',
-            PUBLIC_URL='http://127.0.0.1:4173',BOOTSTRAP_TOKEN='test-only-bootstrap-token',
+            PUBLIC_URL='http://127.0.0.1:4173',BOOTSTRAP_TOKEN='test-only-bootstrap-token', ACCOUNT_CREATION_ENABLED='true',
             ARTIFACT_ROOT=str(Path(temp)/'artifacts'))
         import uvicorn
         uvicorn.run('app.main:app',host='127.0.0.1',port=18082,log_level='warning')

@@ -9,6 +9,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [team, setTeam] = useState<AuthContextValue['team']>(null)
   const [role, setRole] = useState<AuthContextValue['role']>(null)
   const [status, setStatus] = useState<AuthContextValue['status']>('loading')
+  const [accountCreationEnabled, setAccountCreationEnabled] = useState(false)
 
   const applyPayload = (payload: Awaited<ReturnType<typeof authApi.me>>) => {
     setUser(payload.user)
@@ -40,7 +41,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const authStatus = await authApi.status()
         if (!active) return
-        if (!authStatus.initialized) {
+        const creationEnabled = authStatus.account_creation_enabled === true
+        setAccountCreationEnabled(creationEnabled)
+        if (!authStatus.initialized && creationEnabled) {
           setStatus('uninitialized')
           return
         }
@@ -59,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     team,
     role,
     status,
+    accountCreationEnabled,
     signIn: async (email, password) => {
       const payload = await authApi.login({ email, password })
       applyPayload(payload)
@@ -77,7 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus('unauthenticated')
     },
     refresh,
-  }), [role, status, team, user])
+  }), [accountCreationEnabled, role, status, team, user])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

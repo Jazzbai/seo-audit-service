@@ -32,6 +32,7 @@ def platform(monkeypatch,tmp_path):
     monkeypatch.setattr(settings,'PUBLIC_URL','http://testserver')
     monkeypatch.setattr(settings,'COOKIE_SECURE',False)
     monkeypatch.setattr(settings,'BOOTSTRAP_TOKEN',TEST_BOOTSTRAP_TOKEN)
+    monkeypatch.setattr(settings, "ACCOUNT_CREATION_ENABLED", True)
     monkeypatch.setattr(settings,'ENCRYPTION_KEY','x'*44)
     monkeypatch.setattr(settings,'ARTIFACT_ROOT',str(tmp_path/'artifacts'))
     monkeypatch.setattr(worker,'SessionLocal',factory)

@@ -38,6 +38,7 @@ export interface AuthPayload {
 
 export interface AuthStatus {
   initialized: boolean
+  account_creation_enabled?: boolean
 }
 
 export interface Site {

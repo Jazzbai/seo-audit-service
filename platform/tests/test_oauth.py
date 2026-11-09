@@ -49,6 +49,7 @@ def oauth_api(monkeypatch) -> Iterator[tuple[TestClient, sessionmaker]]:
     monkeypatch.setattr(settings, "COOKIE_SECURE", False)
     monkeypatch.setattr(settings, "ENCRYPTION_KEY", MASTER_KEY)
     monkeypatch.setattr(settings, "BOOTSTRAP_TOKEN", BOOTSTRAP_TOKEN)
+    monkeypatch.setattr(settings, "ACCOUNT_CREATION_ENABLED", True)
     from app import worker
     monkeypatch.setattr(worker.execute_job, "apply_async", lambda *args, **kwargs: None)
 

@@ -54,6 +54,7 @@ def foundation_api(monkeypatch) -> Iterator[tuple[TestClient, sessionmaker]]:
     monkeypatch.setattr(settings, "COOKIE_SECURE", False)
     monkeypatch.setattr(settings, "GLOBAL_PAUSE", False)
     monkeypatch.setattr(settings, "BOOTSTRAP_TOKEN", TEST_BOOTSTRAP_TOKEN)
+    monkeypatch.setattr(settings, "ACCOUNT_CREATION_ENABLED", True)
     monkeypatch.setattr(worker.execute_job, "apply_async", lambda *args, **kwargs: None)
 
     with TestClient(application) as client:

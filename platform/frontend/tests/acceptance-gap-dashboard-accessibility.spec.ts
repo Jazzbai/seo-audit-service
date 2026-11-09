@@ -244,7 +244,7 @@ for (const { path, initialized, heading } of [
       await page.setViewportSize({ width, height: 900 })
       await page.route('**/api/v1/**', async (route) => {
         const pathName = new URL(route.request().url()).pathname.replace('/api/v1', '')
-        if (pathName === '/auth/status') return json(route, { initialized })
+        if (pathName === '/auth/status') return json(route, { initialized, account_creation_enabled: !initialized })
         if (pathName === '/auth/me') return json(route, { detail: 'Not authenticated' }, 401)
         return json(route, { detail: 'Unexpected request' }, 404)
       })

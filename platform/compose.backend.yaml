@@ -13,6 +13,7 @@ x-environment: &environment
   PUBLIC_URL: https://${FORGE_HOSTNAME:-deployment.invalid}
   APP_ADDRESS: ${FORGE_HOSTNAME:-deployment.invalid}
   COOKIE_SECURE: "true"
+  ACCOUNT_CREATION_ENABLED: ${ACCOUNT_CREATION_ENABLED:-false}
   GLOBAL_PAUSE: "true"
   API_BIND_IP: ${API_BIND_IP:-127.0.0.1}
   TRUSTED_PROXY_IP: ${TRUSTED_PROXY_IP:-127.0.0.1}

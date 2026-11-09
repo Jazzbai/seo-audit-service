@@ -53,6 +53,7 @@ def database(tmp_path):
 def auth_client(database, monkeypatch) -> Iterator[TestClient]:
     _engine, factory = database
     monkeypatch.setattr(auth.settings, "BOOTSTRAP_TOKEN", TEST_BOOTSTRAP_TOKEN)
+    monkeypatch.setattr(auth.settings, "ACCOUNT_CREATION_ENABLED", True)
     application = FastAPI()
     application.include_router(auth.router)
 
