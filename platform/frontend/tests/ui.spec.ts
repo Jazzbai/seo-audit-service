@@ -256,7 +256,7 @@ test('overview labels audit coverage age separately from monitoring health', asy
   const freshness = page.getByRole('status', { name: 'Audit coverage freshness: Stale' })
   await expect(freshness).toContainText('Audit data: Stale')
   await expect(freshness).toContainText('run an audit before relying on this coverage')
-  await expect(page.getByText('All systems steady', { exact: true })).toBeVisible()
+  await expect(page.getByText('Monitoring active', { exact: true })).toBeVisible()
 })
 
 test('overview labels automation state separately from monitoring health', async ({ page }) => {
@@ -267,7 +267,25 @@ test('overview labels automation state separately from monitoring health', async
   await expect(automation).toBeVisible()
   await expect(automation).toContainText('Automation')
   await expect(page.getByText('Site-level automation is paused. Observations and reviews remain available; governed writes are held.', { exact: true })).toBeVisible()
-  await expect(page.getByText('All systems steady', { exact: true })).toBeVisible()
+  await expect(page.getByText('Monitoring active', { exact: true })).toBeVisible()
+})
+
+test('a healthy scheduler does not hide blocked SEO outcomes', async ({ page }) => {
+  await installWorkspaceMocks(page)
+  await page.route('**/api/v1/sites/site-1/overview', route => json(route, {
+    ...overview,
+    automation_health: { status: 'needs_attention', scope: 'latest_outcomes_not_scheduler_health', issues: [
+      { code: 'google_connection_failed', connection_kind: 'gsc', message: 'Google reporting needs attention.', destination: 'settings/connections' },
+      { code: 'content_autopilot_needs_attention', message: 'Publication was not confirmed.', blockers: ['research_review_required'], destination: 'jobs' },
+    ] },
+  }))
+  await page.goto('/sites/site-1/overview')
+  await expect(page.getByText('Monitoring active', { exact: true })).toBeVisible()
+  await expect(page.getByText('SEO automation needs attention', { exact: true })).toBeVisible()
+  await expect(page.getByText('A running scheduler does not mean reporting or publishing succeeded.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Review connections', exact: true })).toHaveAttribute('href', '/sites/site-1/settings/connections')
+  await expect(page.getByRole('link', { name: 'Review jobs', exact: true })).toHaveAttribute('href', '/sites/site-1/jobs')
+  await expect(page.getByText('All systems steady', { exact: true })).toHaveCount(0)
 })
 
 test('overview makes missing audit age explicit', async ({ page }) => {

@@ -598,6 +598,7 @@ def patch_site(site_id: str, payload: SitePatch, ctx=Depends(require_user), db=D
 
 @router.get("/sites/{site_id}/overview")
 def overview(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
+    from app.automation_health import automation_health
     site = guard(db, ctx, site_id)
     def count(cls, *filters):
         return db.scalar(select(func.count()).select_from(cls).where(cls.site_id == site_id, *filters))
@@ -626,6 +627,7 @@ def overview(site_id: str, ctx=Depends(require_user), db=Depends(get_db)):
             "published_articles": count(Article, Article.status == 'published'), "open_incidents": count(Incident, Incident.status == 'open')},
             "monitoring": {**monitoring_status(db, site_id=site_id), "site_paused": site.paused}, "budget": budget,
             "global_pause": global_controls(db)['global_pause'],
+            "automation_health": automation_health(db, site),
             "recent_events": paginated(db, Event, [Event.site_id == site_id], 10,
                                         transform=activity_view)['items'],
             "coverage": {"status": coverage_status,

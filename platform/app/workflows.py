@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
@@ -1598,7 +1599,7 @@ async def plan(db, site, job):
     briefs = plan_topics(site.facts, pages, keywords,
                          [p for p in pages if p['resource_type'] == 'products'],
                          origin=site.origin,
-                         research_inputs=research_inputs)
+                         research_inputs=research_inputs, automatic=True)
     existing = {a.title.lower().strip() for a in db.scalars(select(Article).where(Article.site_id == site.id))}
     requested_limit = job.payload.get('max_articles', 8) if isinstance(job.payload, dict) else 8
     if isinstance(requested_limit, bool) or not isinstance(requested_limit, int):
@@ -1608,9 +1609,11 @@ async def plan(db, site, job):
     # without changing the planner's default behavior for scheduled planning.
     requested_limit = max(1, min(8, requested_limit))
     created = []
-    for brief in briefs[:requested_limit]:
+    for brief in briefs:
         title = brief.get('title', '')
         if not title or title.lower().strip() in existing:
+            continue
+        if _content_autopilot_topic_blockers(site, SimpleNamespace(title=title, brief=brief)):
             continue
         article = Article(site_id=site.id, title=title, slug=re.sub(r'[^a-z0-9]+','-',title.lower()).strip('-')[:120],
                           brief=brief, sources=brief.get('sources',[]), author_id=(policy.settings.get('author_id') if policy else None),
@@ -1619,6 +1622,8 @@ async def plan(db, site, job):
         db.flush()
         created.append(article.id)
         existing.add(title.lower().strip())
+        if len(created) >= requested_limit:
+            break
     event(db, site, 'content_planned', f'{len(created)} article briefs added to the content plan')
     return {'article_ids':created,'count':len(created)}
 
@@ -1902,6 +1907,11 @@ def _content_autopilot_topic_blockers(site, article):
         return ['regulated_topic_requires_editorial_review']
     if title in {'auto guide', 'auto 1 guide', 'a u t o collision guide'}:
         return ['topic_requires_editorial_review']
+    evidence = brief.get('evidence') if isinstance(brief.get('evidence'), list) else []
+    if any(isinstance(item, dict) and item.get('kind') in {'search_observation', 'supplied_keyword'} for item in evidence):
+        from app.intelligence.content import business_topic_matches
+        if not business_topic_matches(brief.get('topic') or title, facts):
+            return ['topic_not_supported_by_business_services']
     return []
 
 
@@ -2169,7 +2179,8 @@ async def content_autopilot(db, site, job):
     stages = [planning_stage]
     brief = dict(article.brief or {})
     research = brief.get('research') if isinstance(brief.get('research'), dict) else None
-    if not research or research.get('complete') is not True:
+    from app.intelligence.research import research_needs_refresh
+    if research_needs_refresh(brief):
         event(db, site, 'content_autopilot_research_started', 'Content autopilot research started', {
             'job_id': job.id, 'article_id': article.id,
         })
@@ -2563,13 +2574,13 @@ def reconcile_provider_cost(db,site,reservation,result):
 
 async def generate(db, site, job):
     from app.intelligence.content import generate_article, check_article
-    from app.intelligence.research import research_brief
+    from app.intelligence.research import research_brief, research_needs_refresh
     article = scoped(db, Article, job.payload.get('article_id'), site)
     if article.status in ('published','publishing','verifying'):
         raise ValueError('Published articles require the enrolled refresh workflow')
     brief = dict(article.brief or {})
     research = brief.get('research') if isinstance(brief.get('research'), dict) else None
-    if not research or research.get('complete') is not True:
+    if research_needs_refresh(brief):
         try:
             research = await research_brief(brief, site.facts or {})
         except Exception as exc:

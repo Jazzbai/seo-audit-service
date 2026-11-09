@@ -1656,6 +1656,7 @@ def test_content_plan_uses_recent_search_and_competitor_measurements_as_bounded_
     _, factory, site_id = platform
     with factory() as db:
         site = db.get(Site, site_id)
+        site.facts = {**(site.facts or {}), 'services': ['Windshield repair']}
         db.add(Measurement(
             site_id=site_id,
             kind='gsc',

@@ -566,8 +566,9 @@ def _topic_tokens(value: Any) -> set[str]:
     }
 
 
-def _overlapping_intent(left: Any, right: Any) -> bool:
-    left_tokens, right_tokens = _topic_tokens(left), _topic_tokens(right)
+def _overlapping_intent(left: Any, right: Any, ignored_tokens: set[str] | None = None) -> bool:
+    left_tokens = _topic_tokens(left) - (ignored_tokens or set())
+    right_tokens = _topic_tokens(right) - (ignored_tokens or set())
     if len(left_tokens) < 2 or len(right_tokens) < 2:
         return False
     shared = len(left_tokens & right_tokens)
@@ -792,6 +793,41 @@ def _structured_data_recommendation(facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def business_topic_matches(topic: str, facts: dict[str, Any]) -> bool:
+    """Conservative business-fit check for untrusted search-derived topics."""
+    if not isinstance(topic, str):
+        return False
+    offerings = _string_items(facts.get("services")) + _string_items(facts.get("products"))
+    if not offerings:
+        return False
+    known = " ".join([_normalized_text(facts.get("business_name")), *offerings]).casefold()
+    # Unknown alphanumeric brand fragments (a1, 1stop, etc.) are not a service.
+    if any(token not in known.split() for token in re.findall(r'\b(?:[a-z]+\d\w*|\d+[a-z]\w*)\b', topic.casefold())):
+        return False
+    weak = {"auto", "car", "cars", "repair", "repairs", "service", "services", "shop", "shops",
+            "vehicle", "vehicles", "near", "me", "best", "overview"}
+    locations = set().union(*(_topic_tokens(value) for value in _string_items(facts.get("locations"))))
+    def terms(value):
+        return {token.rstrip('s') for token in _topic_tokens(value) - weak - locations}
+    offered = set().union(*(terms(value) for value in offerings))
+    return bool(terms(topic) & offered)
+
+
+def _topic_source_subset(sources: list[dict[str, Any]], title: str) -> list[dict[str, Any]]:
+    """Keep planned research bounded without raising transport byte limits."""
+    if len(sources) <= 3:
+        return sources
+    tokens = _topic_tokens(title) - {"auto", "repair", "service", "services", "guide"}
+    ranked = sorted(enumerate(sources), key=lambda pair: (
+        -len(tokens & _topic_tokens(str(pair[1].get('title', '')) + ' ' + urlsplit(pair[1]['url']).path)),
+        pair[0]))
+    relevant = [source for _, source in ranked
+                if tokens & _topic_tokens(str(source.get('title', '')) + ' ' + urlsplit(source['url']).path)]
+    # No match is not permission to fetch the entire website. The later
+    # evidence/quality checks can still hold an insufficient brief for review.
+    return (relevant or [source for source in sources if urlsplit(source['url']).path.strip('/')])[:3] or sources[:1]
+
+
 def plan_topics(
     facts: dict[str, Any],
     pages: list[dict[str, Any]],
@@ -799,6 +835,7 @@ def plan_topics(
     products: list[dict[str, Any]] | None = None,
     origin: str | None = None,
     research_inputs: list[dict[str, Any]] | None = None,
+    automatic: bool = False,
 ) -> list[dict[str, Any]]:
     """Build at most eight four-week briefs from supplied inputs only.
 
@@ -814,12 +851,12 @@ def plan_topics(
     product_names = _string_items(supplied_products)
     service_names = _string_items(facts.get("services"))
     location_names = _string_items(facts.get("locations"))
+    location_tokens = set().union(*(_topic_tokens(value) for value in location_names))
     keyword_names = _string_items(keywords)
     audience = facts.get("audience")
     business_name = _normalized_text(facts.get("business_name"))
     fact_values = [item["value"] for item in _flatten_values(facts)]
     confirmed_sources = _collect_sources({}, facts)
-    source_urls = [item["url"] for item in confirmed_sources]
     stored_page_links = _stored_page_link_records(pages, origin=origin)
     normalized_research = _normalize_research_inputs(research_inputs)
     research_candidates, planning_source_summary = _research_candidates(normalized_research)
@@ -927,15 +964,22 @@ def plan_topics(
         title = _normalized_text(candidate.get("title"))
         if not title or title.casefold() in seen_topics:
             continue
+        # Filter before the eight-brief cap so unrelated observations cannot
+        # crowd out the site's actual services. Manual planning retains its
+        # historical review-only evidence contract.
+        if automatic and any(isinstance(item, dict) and item.get('kind') in {'search_observation', 'supplied_keyword'}
+                             for item in (candidate.get('evidence') or [])):
+            if not business_topic_matches(candidate.get('topic') or title, facts):
+                continue
         # A new brief needs a distinct search intent. Existing-page candidates
         # are retained as explicit refresh work; only new topics are skipped
         # when their substantive terms already describe an existing page.
         if candidate.get("purpose") in {"new_topic", "research_observed"} and any(
-            _overlapping_intent(title, existing_title) for existing_title in existing_titles
+            _overlapping_intent(title, existing_title, location_tokens) for existing_title in existing_titles
         ):
             continue
         if candidate.get("purpose") in {"new_topic", "research_observed"} and any(
-            _overlapping_intent(title, selected_item["title"])
+            _overlapping_intent(title, selected_item["title"], location_tokens)
             for selected_item in selected
             if selected_item.get("purpose") in {"new_topic", "research_observed"}
         ):
@@ -950,6 +994,8 @@ def plan_topics(
         for item in planning_source_summary:
             if item not in research_evidence:
                 research_evidence.append(item)
+        topic_sources = _topic_source_subset(confirmed_sources, title)
+        topic_urls = [source['url'] for source in topic_sources]
         brief = {
             "id": _topic_id(title, evidence),
             "week": min(4, len(selected) // 2 + 1),
@@ -962,8 +1008,8 @@ def plan_topics(
             "keywords": list(candidate.get("keywords") or []),
             "products": list(candidate.get("products") or []),
             "evidence": evidence,
-            "sources": confirmed_sources,
-            "source_urls": _dedupe(source_urls + evidence_urls),
+            "sources": topic_sources,
+            "source_urls": _dedupe(topic_urls + evidence_urls),
             "claims_allowed": fact_values,
             "internal_link_opportunities": _internal_link_opportunities(candidate, title, stored_page_links),
             "structured_data_recommendation": _structured_data_recommendation(facts),

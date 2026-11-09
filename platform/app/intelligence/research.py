@@ -110,6 +110,14 @@ def _source_candidates(brief: dict[str, Any], facts: dict[str, Any]) -> list[tup
     brief_values: list[Any] = []
     for key in _SOURCE_KEYS:
         brief_values.extend(_items(brief.get(key)))
+    # Explicit caller-requested navigation targets can be returned by the model
+    # as citations. Fetch them before drafting, under exactly the same limits
+    # and public-network boundary; model-invented URLs are never added here.
+    for value in _items(brief.get("internal_links")):
+        if isinstance(value, dict):
+            brief_values.append({**value, "purpose": "internal_navigation"})
+        elif isinstance(value, str):
+            brief_values.append({"url": value, "purpose": "internal_navigation"})
     evidence = brief.get("evidence")
     for item in _items(evidence):
         if isinstance(item, dict) and (item.get("url") or item.get("source_url") or item.get("link")):
@@ -536,4 +544,19 @@ async def research_brief(
     }
 
 
-__all__ = ["research_brief"]
+def research_needs_refresh(brief: dict[str, Any]) -> bool:
+    """Old complete research must also cover any explicit requested links."""
+    research = brief.get("research")
+    if not isinstance(research, dict) or research.get("complete") is not True:
+        return True
+    fetched = {_source_url(value) for value in _items(research.get("sources"))
+               if isinstance(value, dict) and value.get("status") == "fetched"
+               and value.get("content_hash") and value.get("extracts")}
+    for link in _items(brief.get("internal_links")):
+        url = _source_url(link)
+        if not url or url not in fetched:
+            return True
+    return False
+
+
+__all__ = ["research_brief", "research_needs_refresh"]

@@ -90,6 +90,11 @@ export interface AuthorDiscovery {
 }
 
 export interface Overview {
+  automation_health?: {
+    status: string
+    scope: string
+    issues: Array<{ code: string; message: string; destination: string; job_id?: string; connection_kind?: string; blockers?: string[] }>
+  }
   site: Site
   counts: {
     pages: number
