@@ -1,10 +1,20 @@
-"""Public-only, DNS-pinned HTTP access shared by observations and connectors."""
+"""DNS-pinned public HTTP access, plus exact operator-approved HTTPS routes."""
 import asyncio
 import ipaddress
+import json
 import socket
 from urllib.parse import urlsplit
 
 import httpx
+
+
+def trusted_https_address(host, scheme, port):
+    """An operator route cannot be supplied by a site, DNS reply or redirect."""
+    if scheme != 'https' or port != 443:
+        return None
+    from app.config import settings
+    routes = json.loads(settings.TRUSTED_HTTPS_ROUTES or '{}')
+    return routes.get(host.lower().rstrip('.'))
 
 
 def _effective_port(url):
@@ -25,7 +35,7 @@ async def public_addresses(host, port):
 
 class PublicTransport(httpx.AsyncBaseTransport):
     def __init__(self, origin=None, **kwargs):
-        self.inner = httpx.AsyncHTTPTransport(retries=0,trust_env=False)
+        self.inner = httpx.AsyncHTTPTransport(retries=0,trust_env=False,verify=True)
         self.origin = urlsplit(origin) if origin else None
 
     async def handle_async_request(self, request):
@@ -38,11 +48,17 @@ class PublicTransport(httpx.AsyncBaseTransport):
             or _effective_port(url) != _effective_port(self.origin)
         ):
             raise ValueError('Connector requests cannot change authority')
-        addresses = await public_addresses(url.host, url.port or (443 if url.scheme == 'https' else 80))
+        port = url.port or (443 if url.scheme == 'https' else 80)
+        approved = trusted_https_address(url.host, url.scheme, port)
+        addresses = [approved] if approved else await public_addresses(url.host, port)
         extensions = dict(request.extensions)
         extensions['sni_hostname'] = url.host
+        headers = dict(request.headers)
+        if approved:
+            # Pin the HTTP virtual host as well as the socket and TLS identity.
+            headers['host'] = url.netloc.decode('ascii')
         pinned = httpx.Request(request.method, url.copy_with(host=addresses[0]),
-                               headers=request.headers, stream=request.stream, extensions=extensions)
+                               headers=headers, stream=request.stream, extensions=extensions)
         return await self.inner.handle_async_request(pinned)
 
     async def aclose(self):

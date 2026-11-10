@@ -148,7 +148,11 @@ def validate_public_url(
     """
 
     parsed, normalized = _normalized_url_parts(url)
-    _check_host(parsed.hostname or "", resolve_dns=resolve_dns)
+    from app.network import trusted_https_address
+    approved = trusted_https_address(parsed.hostname or '', parsed.scheme, parsed.port or (443 if parsed.scheme == 'https' else 80))
+    # The transport pins an approved route to its configured address; an
+    # arbitrary private DNS answer still receives the ordinary rejection.
+    _check_host(parsed.hostname or "", resolve_dns=resolve_dns and approved is None)
     return normalized
 
 

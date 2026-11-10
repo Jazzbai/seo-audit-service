@@ -12,6 +12,7 @@ x-app: &app
     PUBLIC_URL: ${PUBLIC_URL:?Set the browser origin}
     COOKIE_SECURE: ${COOKIE_SECURE:-true}
     ACCOUNT_CREATION_ENABLED: ${ACCOUNT_CREATION_ENABLED:-false}
+    TRUSTED_HTTPS_ROUTES: ${TRUSTED_HTTPS_ROUTES:-}
     GLOBAL_PAUSE: "true"
     ARTIFACT_ROOT: /srv/artifacts
   volumes:
