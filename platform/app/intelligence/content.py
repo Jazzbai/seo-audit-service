@@ -793,9 +793,20 @@ def _structured_data_recommendation(facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def credential_topic_requires_review(topic: str) -> bool:
+    """Search demand cannot establish a business's professional credentials."""
+    return isinstance(topic, str) and bool(re.search(
+        r'\b(?:certified|certification|accredited|accreditation|licen[cs]ed|'
+        r'factory[ -]approved|oem[ -]approved|manufacturer[ -]approved)\b',
+        topic, re.I,
+    ))
+
+
 def business_topic_matches(topic: str, facts: dict[str, Any]) -> bool:
     """Conservative business-fit check for untrusted search-derived topics."""
     if not isinstance(topic, str):
+        return False
+    if credential_topic_requires_review(topic):
         return False
     offerings = _string_items(facts.get("services")) + _string_items(facts.get("products"))
     if not offerings:

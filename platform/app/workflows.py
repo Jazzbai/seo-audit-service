@@ -1072,6 +1072,12 @@ async def audit(db, site, job):
             'audit_errors': errors,
             'cursor_retry': next_retry,
         }
+        # A batch boundary must not change the owner's execution mode. In
+        # particular, read-only and governed audits must not fall through to
+        # legacy automatic candidate selection on their next batch.
+        for control in ('skip_inventory', 'suppress_automation', 'full_cycle_mode'):
+            if control in payload:
+                cursor[control] = payload[control]
         # A changing frontier continues immediately; a stalled frontier or
         # incomplete discovery with an empty queue gets bounded retries.
         can_retry = next_retry <= 3
@@ -1910,6 +1916,9 @@ def _content_autopilot_topic_blockers(site, article):
         return ['availability_topic_requires_verified_hours']
     if re.search(r'\b(attorney|lawyer|legal advice)\b', title):
         return ['regulated_topic_requires_editorial_review']
+    from app.intelligence.content import credential_topic_requires_review
+    if credential_topic_requires_review(title):
+        return ['credential_topic_requires_editorial_review']
     if title in {'auto guide', 'auto 1 guide', 'a u t o collision guide'}:
         return ['topic_requires_editorial_review']
     evidence = brief.get('evidence') if isinstance(brief.get('evidence'), list) else []
