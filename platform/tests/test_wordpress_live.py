@@ -87,7 +87,7 @@ def integration_stack():
         for service in ('wp','woo'):
             for _ in range(90):
                 ready = _run_compose('exec','-T',service,'php','-r',
-                                     "require '/var/www/html/wp-load.php'; echo 'ready';")
+                                     "$_SERVER['HTTP_HOST']='fixture.test'; define('WP_INSTALLING', true); require '/var/www/html/wp-load.php'; echo 'ready';")
                 if ready.returncode == 0 and ready.stdout.strip() == 'ready':
                     break
                 time.sleep(1)
@@ -364,6 +364,11 @@ async def test_native_connector_metadata_is_rendered_and_restorable():
     from app.workflows import protected_html
     site=configure(connector=True)
     async with WordPressClient(site['origin'],site,transport=FixtureTransport()) as client:
+        capabilities=await client.discover()
+        assert capabilities['seo']['active_provider']=='native'
+        assert capabilities['seo']['write'] is True
+        assert capabilities['plugins']['yoast']['detected'] is False
+        assert capabilities['plugins']['rank_math']['detected'] is False
         draft=await client.create_draft({'title':'Metadata fixture '+uuid4().hex[:8],'body':'<h2>Repair preparation</h2><p>Keep these original instructions unchanged.</p>','author_id':site['author_id']},'fixture-'+uuid4().hex)
         published=await client.publish(str(draft['id']))
         before=await client.read(published['resource_key'])

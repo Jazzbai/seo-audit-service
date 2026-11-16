@@ -209,13 +209,47 @@ dashboard reporting, not new AI-agent Google tools or MCP access.
 References: [Coolify environment variables](https://coolify.io/docs/applications/configuration/environment-variables),
 [Google OAuth and token expiration](https://developers.google.com/identity/protocols/oauth2).
 
+## WordPress metadata without an SEO plugin
+
+Jazzb SEO does not require Yoast or Rank Math. Install the **Jazzb SEO Connector**
+to provide authenticated title/description writes and native WordPress output.
+Supported existing SEO providers are optional output integrations; the connector
+stores managed values in its own fields. Unknown providers and custom theme
+head output require compatibility verification rather than a universal promise.
+
+Build the uploadable package from the repository root:
+
+```text
+python platform/scripts/build_wordpress_connector.py
+```
+
+The output is `platform/artifacts/releases/jazzb-seo-connector-0.5.0.zip`.
+Upload it through WordPress **Plugins → Add New Plugin → Upload Plugin**, activate
+it, then rerun the site's WordPress connection test in Jazzb SEO. Existing
+installations retain the `forgeseo-connector` folder, REST namespace and metadata
+keys for upgrade compatibility. Webhook configuration is optional.
+
+Verify a revision-guarded apply, public HTML and rollback before allowing
+unattended metadata changes. Posts/pages and supported commerce resources are
+the current targets; this release is not a universal schema, redirect, robots
+or sitemap manager. A packaged release is not evidence of installation on a
+customer's site. Plugin installation also does not override protected paths,
+site pauses, editorial checks or budget policy.
+
+November 16 validation: the no-SEO-plugin fixture passed rendered metadata
+apply/restore and the real platform candidate workflow, including preserved
+body/layout and independently pending sibling candidates. Connector regressions
+passed 41 checks; 6 optional gates were skipped, and PHP syntax was checked
+separately in the isolated WordPress image. No customer-site installation was
+performed during this packaging task.
+
 ## WordPress targeted change notifications
 
 The WordPress **Webhook secret** is optional, site-scoped, and stored encrypted
 with the site's connection credentials. Configure the same secret in the
-optional ForgeSEO WordPress connector only when it sends signed change
-notifications. In WordPress, open **Settings → ForgeSEO Connector**, paste the
-site-specific URL shown by ForgeSEO and the same secret, then save. Leave the
+Jazzb SEO WordPress connector only when it sends signed change
+notifications. In WordPress, open **Settings → Jazzb SEO Connector**, paste the
+site-specific URL shown by Jazzb SEO and the same secret, then save. Leave the
 secret field blank to keep an existing secret unchanged; clear the URL to stop
 delivery. Periodic polling remains the monitoring fallback.
 

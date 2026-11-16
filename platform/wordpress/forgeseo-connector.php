@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: ForgeSEO Connector (narrow integration)
- * Description: Least-privilege REST endpoints for ForgeSEO SEO fields, operation mapping, and signed events.
- * Version: 0.4.0
+ * Plugin Name: Jazzb SEO Connector
+ * Description: Manage SEO titles and descriptions without a separate SEO plugin. Connect WordPress to Jazzb SEO with authenticated REST endpoints and optional signed change notifications.
+ * Version: 0.5.0
  * Requires at least: 6.0
  * Requires PHP: 7.4
  * License: GPL-2.0-or-later
@@ -21,6 +21,7 @@ namespace ForgeSEO\Connector;
 defined('ABSPATH') || exit;
 
 final class REST {
+    private const VERSION = '0.5.0';
     private const NAMESPACE = 'forgeseo/v1';
     private const OPERATION_META = '_forgeseo_operation_key';
     private const SEO_META = array(
@@ -220,6 +221,8 @@ final class REST {
         }
         return new \WP_REST_Response(array(
             'namespace' => self::NAMESPACE,
+            'connector_version' => self::VERSION,
+            'requires_seo_plugin' => false,
             'seo_fields' => array_keys(self::SEO_META),
             'operation_mapping' => true,
             'webhooks' => true,
@@ -434,8 +437,8 @@ final class REST {
 
     public static function add_settings_page(): void {
         add_options_page(
-            'ForgeSEO Connector',
-            'ForgeSEO Connector',
+            'Jazzb SEO Connector',
+            'Jazzb SEO Connector',
             'manage_options',
             'forgeseo-connector',
             array(__CLASS__, 'settings_page')
@@ -446,17 +449,30 @@ final class REST {
         if (!current_user_can('manage_options')) { return; }
         ?>
         <div class="wrap">
-            <h1>ForgeSEO Connector</h1>
-            <p>Optional signed change notifications let ForgeSEO run a targeted audit soon after a page changes. Periodic polling remains active without this configuration.</p>
+            <h1>Jazzb SEO Connector</h1>
+            <p>Jazzb SEO can manage page titles and descriptions without a separate SEO plugin. Connect this site from Jazzb SEO using a WordPress application password.</p>
+            <p>Metadata output: <strong><?php
+                $provider = self::seo_provider();
+                $labels = array(
+                    'native' => 'WordPress — no SEO plugin required',
+                    'yoast' => 'Yoast compatibility',
+                    'rank_math' => 'Rank Math compatibility',
+                    'ambiguous' => 'Multiple SEO providers — resolve the conflict before metadata writes',
+                );
+                echo esc_html($labels[$provider] ?? 'Compatibility check required');
+            ?></strong></p>
+            <p>Changes use the connector's own metadata storage. Existing page content and layout are not changed by these metadata endpoints.</p>
+            <h2>Optional change notifications</h2>
+            <p>Signed change notifications let Jazzb SEO run a targeted audit soon after a page changes. Periodic polling remains active without this configuration. These settings are not required for SEO metadata management.</p>
             <?php settings_errors(); ?>
             <form method="post" action="options.php">
                 <?php settings_fields('forgeseo_connector'); ?>
                 <table class="form-table" role="presentation">
                     <tr>
-                        <th scope="row"><label for="forgeseo_connector_webhook_url">ForgeSEO webhook URL</label></th>
+                        <th scope="row"><label for="forgeseo_connector_webhook_url">Jazzb SEO webhook URL</label></th>
                         <td>
                             <input name="forgeseo_connector_webhook_url" id="forgeseo_connector_webhook_url" type="url" class="regular-text" value="<?php echo esc_attr((string) get_option('forgeseo_connector_webhook_url', '')); ?>" autocomplete="url" />
-                            <p class="description">Use the site-specific URL shown in ForgeSEO Settings. Use HTTPS outside a local test environment.</p>
+                            <p class="description">Use the site-specific URL shown in Jazzb SEO Settings. Use HTTPS outside a local test environment.</p>
                         </td>
                     </tr>
                     <tr>

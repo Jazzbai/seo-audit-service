@@ -81,7 +81,7 @@ def _mock_seo_index(*, provider: str, ambiguous: bool = False) -> dict[str, obje
         namespaces.extend(["yoast/v1", "rankmath/v1"])
     elif provider == "yoast":
         namespaces.append("yoast/v1")
-    else:
+    elif provider == "rank_math":
         namespaces.append("rankmath/v1")
 
     routes: dict[str, object] = {
@@ -119,7 +119,7 @@ def _mock_connector_capabilities(provider: str, *, supported: bool = True) -> di
         "webhooks": True,
         "seo_provider": provider if supported else "ambiguous",
         "seo_write_supported": supported,
-        "seo_write_mode": "documented_frontend_filters" if supported else "unsupported",
+        "seo_write_mode": ("native_meta" if provider == "native" else "documented_frontend_filters") if supported else "unsupported",
         "seo_restore_supported": supported,
         "direct_provider_meta_write": False,
         "provider_filters": {
@@ -189,7 +189,7 @@ def test_connector_uses_documented_wordpress_provider_hooks_and_routes() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ("yoast", "rank_math"))
+@pytest.mark.parametrize("provider", ("native", "yoast", "rank_math"))
 async def test_mocked_provider_capability_and_seo_route(provider: str) -> None:
     state = {"post": _mock_post()}
     requests: list[tuple[str, str]] = []
@@ -225,12 +225,17 @@ async def test_mocked_provider_capability_and_seo_route(provider: str) -> None:
         transport=httpx.MockTransport(handler),
     ) as client:
         capabilities = await client.discover()
-        assert capabilities["plugins"][provider] == {
-            "detected": True,
-            "read": True,
-            "write": False,
-            "writable_fields": [],
-        }
+        if provider == "native":
+            for vendor in ("yoast", "rank_math"):
+                assert capabilities["plugins"][vendor]["detected"] is False
+                assert capabilities["plugins"][vendor]["write"] is False
+        else:
+            assert capabilities["plugins"][provider] == {
+                "detected": True,
+                "read": True,
+                "write": False,
+                "writable_fields": [],
+            }
         assert capabilities["seo"]["active_provider"] == provider
         assert capabilities["seo"]["write"] is True
         assert capabilities["forgeseo_plugin"]["writable_fields"] == ["description", "title"]
