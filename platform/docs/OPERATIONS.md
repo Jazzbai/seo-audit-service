@@ -316,6 +316,12 @@ paused until its history, credentials, and policies have been verified.
 
 ## Encrypted backups
 
+The current file-based backup format and large-dataset recovery procedure are
+documented in [Streaming backup and recovery](BACKUP-FORMAT-3.md). Scheduled
+split-host backups stream database rows and artifacts, validate the complete
+archive before publication and retain an authenticated verification receipt.
+Copy the `.forge.verified` sidecar with each v3 archive for health checks.
+
 The backup service is an explicit `backup` profile so a deployment cannot
 silently begin storing archives without an operator supplying a separate
 `BACKUP_KEY`. The key must be a Fernet key and must be retained outside the

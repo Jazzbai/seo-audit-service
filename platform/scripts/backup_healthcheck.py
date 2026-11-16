@@ -2,8 +2,10 @@
 
 The backup container must not report healthy merely because an old archive is
 still present. This probe selects the newest local archive, enforces a
-freshness limit, and fully validates its authenticated contents without
-opening the application database or artifact directory.
+freshness limit, and verifies its integrity without opening the application
+database or artifact directory. V3 archives carry an authenticated receipt of
+full validation; health rechecks stream the ciphertext checksum so they do not
+decrypt and decompress gigabytes on every probe.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from pathlib import Path
 from cryptography.fernet import InvalidToken
 
 from scripts.backup import inspect_backup
+from scripts.streaming_backup import is_streamed_backup, inspect_verified_file, receipt_path
 
 
 DEFAULT_MAX_AGE_SECONDS = 172800
@@ -52,6 +55,11 @@ def _inspect_mirror(latest: Path, mirror_directory: str | Path) -> dict:
         raise RuntimeError("Latest encrypted backup is missing from configured mirror")
     if not exact:
         raise RuntimeError("Configured backup mirror does not match the latest local archive")
+    if is_streamed_backup(latest):
+        receipt = receipt_path(mirrored)
+        if (receipt.is_symlink() or not receipt.is_file()
+                or not filecmp.cmp(receipt_path(latest), receipt, shallow=False)):
+            raise RuntimeError('Configured backup mirror verification receipt is missing or different')
     return {"archive": mirrored.name}
 
 
@@ -98,7 +106,16 @@ def inspect_latest_backup(
         raise RuntimeError("Latest encrypted backup is stale")
 
     try:
-        summary = inspect_backup(latest.read_bytes(), backup_key, credential_key)
+        if is_streamed_backup(latest):
+            summary = inspect_verified_file(latest, backup_key, credential_key)
+            from datetime import datetime
+            created = datetime.fromisoformat(summary['created_at']).timestamp()
+            if not math.isfinite(created) or created > current_time or current_time - created > max_age:
+                raise RuntimeError('Verified backup creation timestamp is stale or invalid')
+        else:
+            if latest.stat().st_size > 2_000_000_000:
+                raise ValueError('Legacy backup exceeds supported encrypted size')
+            summary = inspect_backup(latest.read_bytes(), backup_key, credential_key)
     except (FileNotFoundError, OSError):
         raise RuntimeError("Latest encrypted backup is unavailable") from None
     summary.update({"archive": latest.name, "age_seconds": round(age, 3)})

@@ -148,7 +148,7 @@ services:
         while :; do
         stamp="$$(date -u +%Y%m%dT%H%M%SZ)";
         python -m scripts.backup create "/srv/backups/forgeseo-$${stamp}.forge";
-        find /srv/backups -maxdepth 1 -type f -name 'forgeseo-*.forge' -mtime +"$${BACKUP_RETENTION_DAYS}" -delete;
+        find /srv/backups -maxdepth 1 -type f \( -name 'forgeseo-*.forge' -o -name 'forgeseo-*.forge.verified' \) -mtime +"$${BACKUP_RETENTION_DAYS}" -delete;
         sleep "$${BACKUP_INTERVAL_SECONDS}";
         done
     volumes:

@@ -351,6 +351,12 @@ def restore_backup(database,artifact_root,payload,key,credential_key):
         key,
         credential_key,
     )
+    with ZipFile(io.BytesIO(content)) as archive:
+        return restore_validated_archive(database, artifact_root, archive, manifest, tables, artifact_manifest)
+
+
+def restore_validated_archive(database, artifact_root, archive, manifest, tables, artifact_manifest):
+    """Materialize an already authenticated archive, retaining restore guards."""
     raw_root = Path(artifact_root)
     if raw_root.is_symlink():
         raise ValueError('Restore artifact directory cannot be a symlink')
@@ -358,86 +364,96 @@ def restore_backup(database,artifact_root,payload,key,credential_key):
     if root.exists() and any(root.iterdir()):
         raise ValueError('Restore artifact directory must be empty')
     root.parent.mkdir(parents=True, exist_ok=True)
-    with ZipFile(io.BytesIO(content)) as archive:
-        assets = {}
-        root_created = False
-        if not root.exists():
-            root.mkdir(parents=True)
-            root_created = True
-        # Stage inside the destination volume. Docker volumes can be mounted
-        # separately from the container layer, so a staging directory under
-        # root.parent would make os.replace fail with EXDEV.
-        staging = Path(tempfile.mkdtemp(prefix=f'.{root.name}.restore-', dir=str(root)))
-        created_files = []
-        created_dirs = []
-        try:
-            for name,expected in artifact_manifest.items():
-                path = _validate_artifact_name(name)
-                body = archive.read('artifacts/'+name)
-                if hashlib.sha256(body).hexdigest()!=expected:
-                    raise ValueError('Artifact checksum mismatch')
-                staged = staging.joinpath(*path.parts)
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                staged.write_bytes(body)
-                assets[name] = staged
+    assets = {}
+    root_created = False
+    if not root.exists():
+        root.mkdir(parents=True)
+        root_created = True
+    # Stage inside the destination volume. Docker volumes can be mounted
+    # separately from the container layer, so a staging directory under
+    # root.parent would make os.replace fail with EXDEV.
+    staging = Path(tempfile.mkdtemp(prefix=f'.{root.name}.restore-', dir=str(root)))
+    created_files = []
+    created_dirs = []
+    try:
+        for name,expected in artifact_manifest.items():
+            path = _validate_artifact_name(name)
+            staged = staging.joinpath(*path.parts)
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            digest = hashlib.sha256()
+            with archive.open('artifacts/'+name) as source, staged.open('xb') as output:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+                    output.write(chunk)
+            if digest.hexdigest() != expected:
+                raise ValueError('Artifact checksum mismatch')
+            assets[name] = staged
 
-            with database.begin() as connection:
-                for table in Base.metadata.sorted_tables:
-                    if connection.scalar(select(func.count()).select_from(table)):
-                        raise ValueError('Restore target database is not empty')
-                for table in Base.metadata.sorted_tables:
-                    rows = tables.get(table.name,[])
-                    if not isinstance(rows, list):
+        with database.begin() as connection:
+            for table in Base.metadata.sorted_tables:
+                if connection.scalar(select(func.count()).select_from(table)):
+                    raise ValueError('Restore target database is not empty')
+            for table in Base.metadata.sorted_tables:
+                if table.name == 'sessions':
+                    continue  # Older archives may contain sessions; never revive them.
+                rows = tables.get(table.name,[])
+                batch, batch_size = [], 0
+                for row in rows:
+                    if not isinstance(row, dict):
                         raise ValueError('Backup table data is invalid')
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            raise ValueError('Backup table data is invalid')
-                        for column in table.columns:
-                            if isinstance(column.type,DateTime) and row.get(column.name):
-                                row[column.name] = datetime.fromisoformat(row[column.name])
-                        if table.name=='sites':
-                            row['paused']=True
-                        if table.name=='jobs' and row['status'] in ('queued','retry','running'):
-                            row['status']='needs_reconciliation'
-                        if table.name=='heartbeats' and row['name']=='platform_controls':
-                            row['details']={'global_pause':True}
-                    if rows:
-                        connection.execute(table.insert(),rows)
-                if database.dialect.name=='postgresql':
-                    from sqlalchemy import text
-                    connection.execute(text("SELECT setval(pg_get_serial_sequence('events','id'), COALESCE((SELECT MAX(id) FROM events),1), EXISTS(SELECT 1 FROM events))"))
+                    row = dict(row)
+                    row_size = len(json.dumps(row, default=str).encode())
+                    for column in table.columns:
+                        if isinstance(column.type,DateTime) and row.get(column.name):
+                            row[column.name] = datetime.fromisoformat(row[column.name])
+                    if table.name=='sites':
+                        row['paused']=True
+                    if table.name=='jobs' and row['status'] in ('queued','retry','running'):
+                        row['status']='needs_reconciliation'
+                    if table.name=='heartbeats' and row['name']=='platform_controls':
+                        row['details']={'global_pause':True}
+                    batch.append(row)
+                    batch_size += row_size
+                    if len(batch) >= 250 or batch_size >= 2 * 1024 * 1024:
+                        connection.execute(table.insert(), batch)
+                        batch, batch_size = [], 0
+                if batch:
+                    connection.execute(table.insert(), batch)
+            if database.dialect.name=='postgresql':
+                from sqlalchemy import text
+                connection.execute(text("SELECT setval(pg_get_serial_sequence('events','id'), COALESCE((SELECT MAX(id) FROM events),1), EXISTS(SELECT 1 FROM events))"))
 
-                for name, staged in assets.items():
-                    path = PurePosixPath(name)
-                    target = root.joinpath(*path.parts)
-                    if target.exists():
-                        raise ValueError('Restore artifact directory must be empty')
-                    parent = target.parent
-                    missing = []
-                    while not parent.exists():
-                        missing.append(parent)
-                        parent = parent.parent
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    created_dirs.extend(reversed(missing))
-                    os.replace(staged, target)
-                    created_files.append(target)
-        except Exception:
-            shutil.rmtree(staging, ignore_errors=True)
-            for target in reversed(created_files):
-                target.unlink(missing_ok=True)
-            for directory in sorted(created_dirs, key=lambda item: len(item.parts), reverse=True):
-                try:
-                    directory.rmdir()
-                except OSError:
-                    pass
-            if root_created:
-                try:
-                    root.rmdir()
-                except OSError:
-                    pass
-            raise
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            for name, staged in assets.items():
+                path = PurePosixPath(name)
+                target = root.joinpath(*path.parts)
+                if target.exists():
+                    raise ValueError('Restore artifact directory must be empty')
+                parent = target.parent
+                missing = []
+                while not parent.exists():
+                    missing.append(parent)
+                    parent = parent.parent
+                target.parent.mkdir(parents=True, exist_ok=True)
+                created_dirs.extend(reversed(missing))
+                os.replace(staged, target)
+                created_files.append(target)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        for target in reversed(created_files):
+            target.unlink(missing_ok=True)
+        for directory in sorted(created_dirs, key=lambda item: len(item.parts), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        if root_created:
+            try:
+                root.rmdir()
+            except OSError:
+                pass
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return {'tables':len(manifest['tables']),'artifacts':len(assets),'automation':'paused','browser_sessions':'invalidated'}
 
 
@@ -449,9 +465,9 @@ def main():
     args=parser.parse_args()
     key=os.environ.get('BACKUP_KEY','')
     if args.operation=='create':
-        body=create_backup(engine,settings.ARTIFACT_ROOT,key,settings.ENCRYPTION_KEY)
-        written = write_backup(args.path, body)
-        mirrored = mirror_backup(written, os.environ.get('BACKUP_MIRROR_DIRECTORY'))
+        from scripts.streaming_backup import create_backup_file, mirror_backup_file
+        create_backup_file(engine,settings.ARTIFACT_ROOT,args.path,key,settings.ENCRYPTION_KEY)
+        mirrored = mirror_backup_file(args.path, os.environ.get('BACKUP_MIRROR_DIRECTORY'), key, settings.ENCRYPTION_KEY)
         if mirrored is None:
             print('Encrypted backup created; retain BACKUP_KEY and ENCRYPTION_KEY separately.')
         else:
@@ -462,11 +478,13 @@ def main():
             parser.error('BACKUP_KEY is required for inspect')
         if not credential_key:
             parser.error('ENCRYPTION_KEY is required for inspect')
-        print(json.dumps(inspect_backup(args.path.read_bytes(), key, credential_key)))
+        from scripts.streaming_backup import inspect_backup_file
+        print(json.dumps(inspect_backup_file(args.path, key, credential_key)))
     else:
         if not args.confirm_empty_target:
             parser.error('--confirm-empty-target is required; run migrations on an empty destination first')
-        print(json.dumps(restore_backup(engine,settings.ARTIFACT_ROOT,args.path.read_bytes(),key,settings.ENCRYPTION_KEY)))
+        from scripts.streaming_backup import restore_backup_file
+        print(json.dumps(restore_backup_file(engine,settings.ARTIFACT_ROOT,args.path,key,settings.ENCRYPTION_KEY)))
 
 
 if __name__=='__main__':

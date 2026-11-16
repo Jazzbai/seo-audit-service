@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from app.config import settings
 from app.db import engine
-from scripts.backup import create_backup, inspect_backup, write_backup
+from scripts.streaming_backup import create_backup_file, mirror_backup_file
 
 
 def interval_seconds(value: str) -> float:
@@ -28,17 +28,13 @@ def interval_seconds(value: str) -> float:
 def capture(database, artifacts, directory, backup_key, credential_key):
     if backup_key == credential_key:
         raise ValueError("Backup and application keys must be independent")
-    payload = create_backup(database, artifacts, backup_key, credential_key)
-    summary = inspect_backup(payload, backup_key, credential_key)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     path = Path(directory) / f"forgeseo-{stamp}-{uuid4().hex}.forge"
-    write_backup(path, payload)
-    # Validate the actual stored bytes, not only the in-memory archive.
-    if inspect_backup(path.read_bytes(), backup_key, credential_key) != summary:
-        raise RuntimeError("Stored backup verification failed")
+    summary = create_backup_file(database, artifacts, path, backup_key, credential_key)
+    mirrored = mirror_backup_file(path, os.environ.get('BACKUP_MIRROR_DIRECTORY'), backup_key, credential_key)
     return {"archive": path.name, "backup_id": summary["backup_id"],
             "tables": len(summary["tables"]), "artifacts": summary["artifacts"]["count"],
-            "off_host_copy": "not_configured"}
+            "off_host_copy": "mirrored" if mirrored is not None else "not_configured"}
 
 
 def main() -> int:

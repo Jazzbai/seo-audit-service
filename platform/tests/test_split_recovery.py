@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, select
 
 from app.connectors.security import encrypt_credentials
 from app.models import Base, Connection, Event, Heartbeat, Job, Membership, Session, Site, Team, User, utcnow
-from scripts.backup import inspect_backup, restore_backup
+from scripts.streaming_backup import inspect_backup_file, restore_backup_file
 from scripts.split_backup_loop import capture, interval_seconds
 from scripts.split_restore_drill import validate_target, verify_recovery
 
@@ -69,15 +69,15 @@ def make_recovery(tmp_path):
     artifacts.mkdir()
     (artifacts / "evidence.html").write_text("<h1>Evidence</h1>")
     summary = capture(database, artifacts, tmp_path / "backups", backup_key, credential_key)
-    payload = (tmp_path / "backups" / summary["archive"]).read_bytes()
-    assert secret.encode() not in payload
+    payload = tmp_path / "backups" / summary["archive"]
+    assert secret.encode() not in payload.read_bytes()
     assert secret not in json.dumps(summary)
     assert summary["off_host_copy"] == "not_configured"
-    assert "sessions" not in inspect_backup(payload, backup_key, credential_key)["tables"]
+    assert "sessions" not in inspect_backup_file(payload, backup_key, credential_key)["tables"]
     target = create_engine("sqlite://")
     Base.metadata.create_all(target)
     target_artifacts = tmp_path / "recovered"
-    restore_backup(target, target_artifacts, payload, backup_key, credential_key)
+    restore_backup_file(target, target_artifacts, payload, backup_key, credential_key)
     return target, target_artifacts, payload, backup_key, credential_key
 
 
@@ -191,6 +191,16 @@ def test_real_isolated_postgres_recovery_drill(tmp_path):
         report = json.loads(logs.stdout.strip().splitlines()[-1])
         assert report["credentials_decrypted"] == 1 and report["artifacts_verified"] == 1
         assert report["automation"] == "paused" and report["browser_sessions"] == "invalidated"
+        probe = (
+            "import json,os; from app.db import engine; from app.config import settings; "
+            "from scripts.streaming_backup import create_backup_file; "
+            "print(json.dumps(create_backup_file(engine,settings.ARTIFACT_ROOT,'/tmp/pg-source.forge',"
+            "os.environ['BACKUP_KEY'],settings.ENCRYPTION_KEY)))"
+        )
+        pg_capture = subprocess.run(command + ["run", "--rm", "--no-deps", "--entrypoint", "python",
+            "restore-check", "-c", probe], env=values, capture_output=True, text=True, timeout=60)
+        assert pg_capture.returncode == 0, "PostgreSQL repeatable-read streaming capture failed"
+        assert json.loads(pg_capture.stdout.strip().splitlines()[-1])["format"] == 3
         network = subprocess.run(["docker", "network", "inspect", project + "_isolated"], capture_output=True, text=True, timeout=15)
         assert json.loads(network.stdout)[0]["Internal"] is True
         # A retry must preserve the already-restored database instead of dropping it.

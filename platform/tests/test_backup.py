@@ -228,18 +228,22 @@ def test_backup_mirror_is_opt_in_and_requires_a_separate_mounted_directory(tmp_p
 
 
 def test_backup_create_cli_mirrors_only_after_local_write(tmp_path, monkeypatch, capsys):
+    database, _, backup_key, credential_key = _inspection_fixture(tmp_path)
     local = tmp_path / 'local' / 'forgeseo-created.forge'
     mirror = tmp_path / 'mounted-mirror'
     mirror.mkdir()
-    payload = b'exact-cli-archive'
-    monkeypatch.setenv('BACKUP_KEY', Fernet.generate_key().decode('ascii'))
+    monkeypatch.setenv('BACKUP_KEY', backup_key.decode('ascii'))
     monkeypatch.setenv('BACKUP_MIRROR_DIRECTORY', str(mirror))
-    monkeypatch.setattr(backup_module, 'create_backup', lambda *args: payload)
+    monkeypatch.setattr(backup_module, 'engine', database)
+    monkeypatch.setattr(backup_module.settings, 'ARTIFACT_ROOT', str(tmp_path/'source'))
+    monkeypatch.setattr(backup_module.settings, 'ENCRYPTION_KEY', credential_key)
     monkeypatch.setattr(sys, 'argv', ['backup.py', 'create', str(local)])
 
     backup_module.main()
 
-    assert local.read_bytes() == (mirror / local.name).read_bytes() == payload
+    assert local.read_bytes() == (mirror / local.name).read_bytes()
+    from scripts.streaming_backup import inspect_verified_file
+    assert inspect_verified_file(mirror/local.name, backup_key, credential_key)['format'] == 3
     assert 'mirrored' in capsys.readouterr().out
 
 
