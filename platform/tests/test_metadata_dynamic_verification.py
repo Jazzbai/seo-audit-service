@@ -75,3 +75,26 @@ def test_source_guard_also_protects_authoritative_content():
     assert source_drift(before, after) == []
     assert source_drift(before, {**after, 'body': '<p>Unapproved edit</p>'}) == ['body']
     assert source_drift(before, {**after, 'categories': [47]}) == ['categories']
+
+
+def test_source_guard_checks_actual_wordpress_nested_attribution_and_taxonomy():
+    before = {'title': 'Original', 'body': '<p>Original</p>',
+              'metadata': {'author_id': 1, 'categories': [68], 'featured_media_id': 100}}
+    after = {**before, 'metadata': {**before['metadata'], 'author_id': 6, 'categories': [47], 'featured_media_id': 101}}
+    assert source_drift(before, after) == ['author_id', 'categories', 'featured_media']
+
+
+@pytest.mark.parametrize('description', [
+    'However, the truth is far from these misconceptions.',
+    'While it can be natural to feel anxious, this visit is a beginning.',
+])
+def test_observed_context_dependent_descriptions_require_rewriting(description):
+    from app.intelligence.content import check_metadata
+    result = check_metadata('meta_description', description)
+    assert not result['passed']
+    assert 'metadata_context_dependent' in result['blockers']
+
+
+def test_standalone_description_with_a_concrete_subject_remains_eligible():
+    from app.intelligence.content import check_metadata
+    assert check_metadata('meta_description', 'Learn which questions to ask about a written dental treatment estimate.')['passed']

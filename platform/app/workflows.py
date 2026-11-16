@@ -775,6 +775,7 @@ _SAFE_GOVERNED_REASON_CODES = frozenset({
     'protected_path',
     'page_not_enrolled',
     'candidate_page_missing',
+    'source_conflict',
     'verified_writable_resource_required',
     'unsupported_metadata_field',
     'metadata_editorial_checks_failed',
@@ -864,6 +865,8 @@ def _governed_metadata_execution(db, site):
         elif page.resource_type == 'discovered_page':
             blockers.append('verified_writable_resource_required')
         else:
+            if row.source_hash != page.source_hash:
+                blockers.append('source_conflict')
             blockers.extend(candidate_execution_blockers(db, site, row, page))
             blockers.extend(evaluate_policy(
                 site,

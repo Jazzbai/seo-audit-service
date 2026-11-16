@@ -132,3 +132,18 @@ def test_unwritable_archive_candidates_do_not_starve_writable_metadata(platform,
         assert result['review_gated_count'] >= 15
         assert db.get(Candidate, safe_id).status == 'approved'
         assert len(db.scalars(select(Job).where(Job.site_id == site_id, Job.kind == 'candidate')).all()) == 1
+
+
+def test_known_stale_metadata_is_held_before_a_worker_is_queued(platform, monkeypatch):
+    client, factory, site_id = platform
+    safe_id, _ = _prepare_metadata_fixture(client, factory, site_id)
+    monkeypatch.setattr(settings, 'GLOBAL_PAUSE', False)
+    with factory() as db:
+        candidate = db.get(Candidate, safe_id)
+        page = db.get(Page, candidate.page_id)
+        page.source_hash = 'fresh-authenticated-inventory-source'
+        db.commit()
+        result = workflows._governed_metadata_execution(db, db.get(Site, site_id))
+        assert result['authorized_count'] == 0
+        assert candidate.status == 'pending'
+        assert 'source_conflict' in next(x for x in result['review_gated'] if x['candidate_id'] == safe_id)['reasons']

@@ -1602,6 +1602,8 @@ def check_metadata(field: str, value: Any) -> dict[str, Any]:
             blockers.append(issue)
     if normalized_field in {"meta_description", "description"} and text:
         lower = text.casefold()
+        if re.match(r"^(?:however,?\s+(?:the truth|this|these|it)\b|while\s+it\s+can\s+be\b)", lower):
+            blockers.append("metadata_context_dependent")
         if re.search(r"\bwhat\s+really\b|\bor\s+pay\b", lower):
             blockers.append("metadata_truncated_clause")
         if text.endswith(("...", "…", "—", "–", "-", ":", ",", "/")):

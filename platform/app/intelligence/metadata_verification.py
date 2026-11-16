@@ -79,4 +79,11 @@ def source_drift(before, after):
     """Metadata writes must preserve authoritative native content too."""
     fields = ('title', 'body', 'excerpt', 'slug', 'status', 'author_id',
               'categories', 'tags', 'featured_media')
-    return [key for key in fields if before.get(key) != after.get(key)]
+    def value(source, key):
+        if key in source:
+            return source[key]
+        # WordPressClient exposes author, taxonomy and media IDs inside its
+        # normalized metadata object, rather than at the record's top level.
+        metadata_key = 'featured_media_id' if key == 'featured_media' else key
+        return (source.get('metadata') or {}).get(metadata_key)
+    return [key for key in fields if value(before, key) != value(after, key)]
