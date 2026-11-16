@@ -243,6 +243,10 @@ passed 41 checks; 6 optional gates were skipped, and PHP syntax was checked
 separately in the isolated WordPress image. No customer-site installation was
 performed during this packaging task.
 
+The subsequent H-Town-only installation and verified automatic metadata pilot
+are recorded in [the November 16 activation review](reviews/HTOWN-METADATA-ACTIVATION-2026-11-16.md).
+That site-specific evidence does not certify other WordPress installations.
+
 ## WordPress targeted change notifications
 
 The WordPress **Webhook secret** is optional, site-scoped, and stored encrypted
