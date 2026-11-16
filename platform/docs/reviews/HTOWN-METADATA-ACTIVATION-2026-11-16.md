@@ -143,6 +143,11 @@ design and test a full restore before expanding the unattended rollout.
 The separate H-Town WordPress database backup and connector rollback remain
 available at the locations recorded above.
 
+Later on November 16, the platform backup failure described above was resolved
+in release `320c97a`. A new full-dataset archive and isolated recovery both
+passed verification. See the [backup repair follow-up](BACKUP-REPAIR-2026-11-16.md)
+for the implementation, evidence and remaining off-host storage limitation.
+
 ## Evidence and interpretation
 
 Private local evidence is under
