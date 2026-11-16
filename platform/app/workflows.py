@@ -762,6 +762,7 @@ def _upsert_site_reconciliation(db, site, reconciliation, *, complete):
 
 _GOVERNED_METADATA_LIMIT = 10
 _GOVERNED_METADATA_SCAN_LIMIT = 1000
+_METADATA_WRITABLE_RESOURCE_TYPES = frozenset({'posts', 'pages', 'products', 'categories', 'product_categories'})
 _GOVERNED_REASON_LIMIT = 8
 _GOVERNED_REASON_LENGTH = 80
 _SAFE_GOVERNED_REASON_CODES = frozenset({
@@ -862,7 +863,7 @@ def _governed_metadata_execution(db, site):
         blockers = []
         if page is None:
             blockers.append('candidate_page_missing')
-        elif page.resource_type == 'discovered_page':
+        elif page.resource_type not in _METADATA_WRITABLE_RESOURCE_TYPES:
             blockers.append('verified_writable_resource_required')
         else:
             if row.source_hash != page.source_hash:
@@ -3411,7 +3412,7 @@ async def candidate(db, site, job):
         raise ValueError('Candidate is review-only: ' + ', '.join(blocked_reasons))
     if row.field not in ('seo_title','meta_description'):
         raise ValueError('This candidate type needs an implemented writer')
-    if page.resource_type == 'discovered_page':
+    if page.resource_type not in _METADATA_WRITABLE_RESOURCE_TYPES:
         raise ValueError('Page has no verified writable resource mapping')
     policy = authorize(db, site, 'metadata', page)
     # Complete-meaning check is independent from API readiness or character length.

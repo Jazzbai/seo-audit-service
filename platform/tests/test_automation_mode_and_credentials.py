@@ -147,3 +147,18 @@ def test_known_stale_metadata_is_held_before_a_worker_is_queued(platform, monkey
         assert result['authorized_count'] == 0
         assert candidate.status == 'pending'
         assert 'source_conflict' in next(x for x in result['review_gated'] if x['candidate_id'] == safe_id)['reasons']
+
+
+@pytest.mark.parametrize('resource_type', ['authors', 'media', 'unknown', 'discovered_page'])
+def test_metadata_queue_rejects_resources_without_an_implemented_writer(platform, monkeypatch, resource_type):
+    client, factory, site_id = platform
+    safe_id, _ = _prepare_metadata_fixture(client, factory, site_id)
+    monkeypatch.setattr(settings, 'GLOBAL_PAUSE', False)
+    with factory() as db:
+        candidate = db.get(Candidate, safe_id)
+        db.get(Page, candidate.page_id).resource_type = resource_type
+        db.commit()
+        result = workflows._governed_metadata_execution(db, db.get(Site, site_id))
+        assert result['queued_count'] == 0
+        assert candidate.status == 'pending'
+        assert 'verified_writable_resource_required' in next(x for x in result['review_gated'] if x['candidate_id'] == safe_id)['reasons']
