@@ -359,7 +359,8 @@ async def test_platform_publication_lifecycle_against_real_wordpress(platform,na
 
 
 @pytest.mark.asyncio
-async def test_native_connector_metadata_is_rendered_and_restorable():
+@pytest.mark.parametrize('resource_type', ['post', 'page'])
+async def test_native_connector_metadata_is_rendered_and_restorable(resource_type):
     from bs4 import BeautifulSoup
     from app.workflows import protected_html
     site=configure(connector=True)
@@ -369,8 +370,16 @@ async def test_native_connector_metadata_is_rendered_and_restorable():
         assert capabilities['seo']['write'] is True
         assert capabilities['plugins']['yoast']['detected'] is False
         assert capabilities['plugins']['rank_math']['detected'] is False
-        draft=await client.create_draft({'title':'Metadata fixture '+uuid4().hex[:8],'body':'<h2>Repair preparation</h2><p>Keep these original instructions unchanged.</p>','author_id':site['author_id']},'fixture-'+uuid4().hex)
-        published=await client.publish(str(draft['id']))
+        title='Metadata fixture '+uuid4().hex[:8]
+        body='<h2>Repair preparation</h2><p>Keep these original instructions unchanged.</p>'
+        if resource_type == 'post':
+            draft=await client.create_draft({'title':title,'body':body,'author_id':site['author_id']},'fixture-'+uuid4().hex)
+        else:
+            async with httpx.AsyncClient(transport=FixtureTransport(),auth=(site['username'],site['application_password'])) as remote:
+                response=await remote.post(site['origin']+'/wp-json/wp/v2/pages',json={'title':title,'slug':'metadata-page-'+uuid4().hex[:8],'content':body,'status':'draft','author':int(site['author_id'])})
+                assert response.status_code == 201
+                draft=await client.read('page:'+str(response.json()['id']))
+        published=await client.publish(draft['resource_key'])
         before=await client.read(published['resource_key'])
         async with httpx.AsyncClient(transport=FixtureTransport()) as public:
             original_html=(await public.get(published['url'])).text

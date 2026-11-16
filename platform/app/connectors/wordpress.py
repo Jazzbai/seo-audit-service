@@ -348,6 +348,7 @@ class WordPressClient(AsyncConnector):
         self._forgeseo_fields: set[str] = set()
         self._forgeseo_seo_methods: set[str] = set()
         self._forgeseo_seo_route: str | None = None
+        self._forgeseo_shared_page_route = False
         self._forgeseo_operation_route: str | None = None
         self._auto1_seo_write = False
 
@@ -813,6 +814,7 @@ class WordPressClient(AsyncConnector):
         self._forgeseo_fields = set()
         self._forgeseo_seo_methods = set()
         self._forgeseo_seo_route = None
+        self._forgeseo_shared_page_route = False
         self._forgeseo_operation_route = None
         detected: dict[str, Any] = {}
         for provider, names in _SEO_PROVIDERS.items():
@@ -982,6 +984,15 @@ class WordPressClient(AsyncConnector):
             if not isinstance(connector_payload, Mapping):
                 raise ConnectorError("ForgeSEO connector returned invalid capabilities")
             connector_capabilities = connector_payload
+            seo_resource_types = connector_capabilities.get('seo_resource_types')
+            # The packaged connector uses one ID-scoped /posts/.../seo route
+            # for WordPress posts and pages. Require its explicit declaration;
+            # a legacy or third-party posts-only route must not imply pages.
+            self._forgeseo_shared_page_route = (
+                isinstance(seo_resource_types, Sequence)
+                and not isinstance(seo_resource_types, (str, bytes))
+                and 'posts' in seo_resource_types and 'pages' in seo_resource_types
+            )
 
             advertised_fields = connector_capabilities.get("seo_fields")
             if isinstance(advertised_fields, Sequence) and not isinstance(advertised_fields, (str, bytes)):
@@ -1751,7 +1762,9 @@ class WordPressClient(AsyncConnector):
         route = self._forgeseo_seo_route
         if not route:
             raise UnsupportedField("seo")
-        if self._seo_route_resource(route) != endpoint:
+        resource = self._seo_route_resource(route)
+        shared_page = endpoint == 'pages' and resource == 'posts' and self._forgeseo_shared_page_route
+        if resource != endpoint and not shared_page:
             raise UnsupportedField(
                 "seo",
                 "ForgeSEO SEO route is not a verified item resource route",

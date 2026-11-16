@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.connectors import ConnectorError
+from app.connectors import ConnectorError, UnsupportedField
 from app.connectors.wordpress import WordPressClient
 
 
@@ -113,6 +113,34 @@ async def _discover(index: dict[str, Any], extra: dict[str, Any] | None = None) 
         transport=httpx.MockTransport(handler),
     ) as client:
         return await client.discover()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('declared,allowed', [
+    (['posts', 'pages'], True), (['posts'], False), (None, False),
+    ('posts,pages', False), (['pages'], False),
+])
+async def test_shared_item_metadata_route_requires_explicit_page_support(declared, allowed):
+    def handler(request):
+        if request.url.path == '/wp-json/':
+            return _response(request, _index(forgeseo=True))
+        if request.url.path == '/wp-json/forgeseo/v1/capabilities':
+            return _response(request, {'seo_fields': ['title', 'description'],
+                'seo_write_supported': True, 'seo_resource_types': declared})
+        pytest.fail('Unexpected metadata routing discovery request')
+
+    async with WordPressClient('https://capabilities.fixture.test', {},
+                               transport=httpx.MockTransport(handler)) as client:
+        await client.discover()
+        expected = 'https://capabilities.fixture.test/wp-json/forgeseo/v1/posts/42/seo'
+        assert client._seo_route_path('posts', '42') == expected
+        if allowed:
+            assert client._seo_route_path('pages', '42') == expected
+        else:
+            with pytest.raises(UnsupportedField):
+                client._seo_route_path('pages', '42')
+        with pytest.raises(UnsupportedField):
+            client._seo_route_path('authors', '42')
 
 
 @pytest.mark.asyncio
