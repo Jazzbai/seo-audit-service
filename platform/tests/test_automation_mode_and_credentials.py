@@ -107,3 +107,28 @@ def test_governed_continuation_keeps_metadata_field_restriction(platform, monkey
         assert 'unsupported_metadata_field' in gated['reasons']
         assert not any(j.payload.get('candidate_id') == candidate.id for j in db.scalars(
             select(Job).where(Job.site_id == site_id, Job.kind == 'candidate')))
+
+
+def test_unwritable_archive_candidates_do_not_starve_writable_metadata(platform, monkeypatch):
+    from datetime import datetime
+    client, factory, site_id = platform
+    safe_id, _ = _prepare_metadata_fixture(client, factory, site_id)
+    monkeypatch.setattr(settings, 'GLOBAL_PAUSE', False)
+    with factory() as db:
+        for i in range(15):
+            page = Page(site_id=site_id, resource_key=f'discovered:{i}', resource_type='discovered_page',
+                        url=f'https://example.test/tag/{i}/', source_hash=f'archive-{i}')
+            db.add(page)
+            db.flush()
+            db.add(Candidate(site_id=site_id, page_id=page.id, field='meta_description',
+                             before_value='', after_value='A complete archive description.',
+                             source_hash=page.source_hash, created_at=datetime(2020, 1, 1)))
+        db.commit()
+        result = workflows._governed_metadata_execution(db, db.get(Site, site_id))
+        db.commit()
+        assert result['examined_count'] > 15
+        assert result['authorized_candidate_ids'] == [safe_id]
+        assert len(result['review_gated']) <= result['candidate_limit'] == 10
+        assert result['review_gated_count'] >= 15
+        assert db.get(Candidate, safe_id).status == 'approved'
+        assert len(db.scalars(select(Job).where(Job.site_id == site_id, Job.kind == 'candidate')).all()) == 1

@@ -761,6 +761,7 @@ def _upsert_site_reconciliation(db, site, reconciliation, *, complete):
 
 
 _GOVERNED_METADATA_LIMIT = 10
+_GOVERNED_METADATA_SCAN_LIMIT = 1000
 _GOVERNED_REASON_LIMIT = 8
 _GOVERNED_REASON_LENGTH = 80
 _SAFE_GOVERNED_REASON_CODES = frozenset({
@@ -820,11 +821,14 @@ def _governed_metadata_execution(db, site):
     candidates = db.scalars(
         select(Candidate)
         .where(Candidate.site_id == site.id, Candidate.status == 'pending')
-        .limit(_GOVERNED_METADATA_LIMIT)
+        .order_by(Candidate.created_at.asc(), Candidate.id.asc())
+        .limit(_GOVERNED_METADATA_SCAN_LIMIT)
     ).all()
     summary = {
         'candidate_limit': _GOVERNED_METADATA_LIMIT,
-        'examined_count': len(candidates),
+        'scan_limit': _GOVERNED_METADATA_SCAN_LIMIT,
+        'examined_count': 0,
+        'review_gated_count': 0,
         'authorized_count': 0,
         'queued_count': 0,
         'authorized_candidate_ids': [],
@@ -834,17 +838,23 @@ def _governed_metadata_execution(db, site):
     }
 
     def review_gate(row, reasons):
-        summary['review_gated'].append({
-            'candidate_id': row.id,
-            'reasons': _safe_reason_codes(reasons),
-        })
+        summary['review_gated_count'] += 1
+        if len(summary['review_gated']) < _GOVERNED_METADATA_LIMIT:
+            summary['review_gated'].append({
+                'candidate_id': row.id,
+                'reasons': _safe_reason_codes(reasons),
+            })
 
     if policy_blockers:
-        for row in candidates:
+        for row in candidates[:_GOVERNED_METADATA_LIMIT]:
+            summary['examined_count'] += 1
             review_gate(row, policy_blockers)
         return summary
 
     for row in candidates:
+        if len(summary['authorized_candidate_ids']) >= _GOVERNED_METADATA_LIMIT:
+            break
+        summary['examined_count'] += 1
         page = db.scalar(
             select(Page).where(Page.id == row.page_id, Page.site_id == site.id)
         )
@@ -1102,56 +1112,12 @@ async def audit(db, site, job):
                'redirect_chains': len(reconciliation['redirect_chains']),
                'templates': reconciliation['template_coverage']['template_count'],
            }})
-    # Automatic metadata actions are independently authorized again in each
-    # worker. A governed full cycle uses the stricter, summarized variant so
-    # its result can account for every candidate without reflecting provider
-    # payloads. Read-only full cycles retain the historical gate below, which
-    # is intentionally disabled by their stage payload.
+    # Scheduled audits and governed cycles share the same bounded metadata
+    # gate. Unwritable archive candidates must not starve eligible posts.
+    # Read-only stages suppress this gate, including continuation batches.
     metadata_execution = None
-    if (
-        payload.get('full_cycle_mode') == 'governed'
-        and not payload.get('suppress_automation')
-    ):
+    if not payload.get('suppress_automation'):
         metadata_execution = _governed_metadata_execution(db, site)
-    else:
-        policy = current_policy(db, site.id)
-        if (not payload.get('suppress_automation') and policy and policy.settings.get('enabled')
-                and not site.paused and not global_controls(db)['global_pause']):
-            candidates = db.scalars(select(Candidate).where(Candidate.site_id == site.id, Candidate.status == 'pending').limit(10)).all()
-            for candidate in candidates:
-                # Candidate rows may be imported from an older installation or
-                # be corrupted independently of their page foreign key. Resolve
-                # the page through the same site boundary before policy can
-                # authorize or queue any automatic mutation.
-                page = db.scalar(select(Page).where(
-                    Page.id == candidate.page_id,
-                    Page.site_id == site.id,
-                ))
-                if (page and page.resource_type != 'discovered_page'
-                        and not review_only_reasons(candidate)
-                        and not evaluate_policy(site, policy, 'metadata', page)):
-                    # A site policy is an explicit authorization class for the
-                    # actions the owner enabled. Persist that decision before
-                    # the job is queued; the worker still rechecks policy,
-                    # source freshness, and public verification immediately
-                    # before the remote write. This keeps automatic fixes
-                    # auditable while avoiding a permanently pending job that
-                    # the worker must correctly refuse.
-                    candidate.status = 'approved'
-                    candidate.policy_version = policy.version
-                    candidate.details = {
-                        **(candidate.details or {}),
-                        'authorization': {
-                            'type': 'policy',
-                            'action': 'metadata',
-                            'version': policy.version,
-                            'at': iso(now()),
-                        },
-                    }
-                    event(db, site, 'candidate_policy_authorized',
-                          f'Metadata candidate authorized by policy v{policy.version}',
-                          {'candidate_id': candidate.id, 'policy_version': policy.version})
-                    enqueue(db, site, 'candidate', {'candidate_id':candidate.id}, f'candidate:{candidate.id}')
     output = {'complete':result['complete'],'checked_pages':checked,'pending_urls':pending_urls,
               'visited_urls':result.get('visited_urls',[]),'continuation_job_id':continuation_job_id,
               'browser_job_ids':browser_jobs,'errors':errors,'assets':assets[:batch_size],
@@ -4026,7 +3992,7 @@ def _full_cycle_execution_summary(mode, stages):
         raw = audit_stage.get('result', {}).get('metadata_execution') if audit_stage else None
         if isinstance(raw, dict):
             metadata['examined_count'] = _bounded_progress_int(
-                raw.get('examined_count'), minimum=0, maximum=_GOVERNED_METADATA_LIMIT,
+                raw.get('examined_count'), minimum=0, maximum=_GOVERNED_METADATA_SCAN_LIMIT,
             ) or 0
             metadata['authorized_candidate_ids'] = _full_cycle_id_list(
                 raw.get('authorized_candidate_ids'),
