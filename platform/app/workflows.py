@@ -3488,8 +3488,17 @@ async def candidate(db, site, job):
             raise ValueError('Public page is not available')
         from app.intelligence.audit import audit_page
         before_signals = audit_page(page.url,before_public['html'],before)['signals']
-        protected_before = protected_html(before_public['html'])
+        from app.intelligence.metadata_verification import establish_profile, normalize, source_drift
+        # Learn changing recommendation cards from two read-only responses.
+        # Do not excuse a region based on a difference first seen after writing.
+        baseline_public = await fetch(page.url)
+        if baseline_public['status_code'] != 200:
+            raise ValueError('Public verification baseline is not available')
+        verification_profile = establish_profile(before_public['html'], baseline_public['html'], protected_html)
+        protected_before = protected_html(normalize(before_public['html'], verification_profile))
         pub.snapshot = {'source':before,'signals':before_signals,'evidence':capture_html(site,job,page.url,before_public['html'],'before_metadata'),
+                        'verification_profile': verification_profile,
+                        'baseline_evidence': capture_html(site,job,page.url,baseline_public['html'],'metadata_read_only_baseline'),
                         'authorization':row.details.get('authorization',{'type':'policy','version':policy.version})}
         pub.status, row.status, row.policy_version = 'publishing','executing',policy.version
         db.commit()
@@ -3507,8 +3516,9 @@ async def candidate(db, site, job):
             signals = audit_page(page.url,response['html'],after)['signals']
             signals['evidence']=capture_html(site,job,page.url,response['html'],'after_metadata')
             actual = signals.get('title' if row.field == 'seo_title' else 'meta_description')
-            protected_after = protected_html(response['html'])
+            protected_after = protected_html(normalize(response['html'], verification_profile))
             drift = [k for k in protected_before if protected_before[k] != protected_after[k]]
+            drift.extend('source:' + key for key in source_drift(before, after))
             if response['status_code'] != 200 or actual != row.after_value or drift:
                 raise ValueError('Rendered verification failed')
             page.source, page.source_hash, page.signals = after,after['source_hash'],signals
@@ -3527,7 +3537,8 @@ async def candidate(db, site, job):
                     sibling.before_value = current_value
                     sibling.source_hash = after['source_hash']
             row.status, pub.status = 'applied','applied'
-            pub.result = {'status':'applied','public_status':200,'protected_drift':drift,'verified_value':actual,'source_hash':after['source_hash']}
+            pub.result = {'status':'applied','public_status':200,'protected_drift':drift,'verified_value':actual,'source_hash':after['source_hash'],
+                          'verified_dynamic_regions': len(verification_profile)}
             pub.updated_at = now()
             event(db, site, 'candidate_applied', f'{row.field.replace("_"," ")} updated: {page.title}', {'candidate_id':row.id,'publication_id':pub.id})
             return pub.result
@@ -3553,7 +3564,7 @@ async def candidate(db, site, job):
                 if candidate_value(restored, row.field) != (row.before_value or ''):
                     raise ValueError('Rollback metadata verification failed')
                 restored_public = await fetch(page.url)
-                if restored_public['status_code'] != 200 or protected_html(restored_public['html']) != protected_before:
+                if restored_public['status_code'] != 200 or protected_html(normalize(restored_public['html'], verification_profile)) != protected_before:
                     raise ValueError('Rollback public verification failed')
                 pub.status, row.status = 'rolled_back','rolled_back'
             except Exception:
